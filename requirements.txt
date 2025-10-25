@@ -1,0 +1,12 @@
+streamlit
+plotly
+pandas
+numpy
+ccxt
+river
+websocket-client
+requests
+python-dateutil
+pytz
+scikit-learn
+ta
