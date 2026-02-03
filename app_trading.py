@@ -1,8 +1,3 @@
-# app_trading.py - FULLY FIXED VERSION
-# Reinforcement Learning Crypto Trading App
-# Real-time price chart updates every 30 seconds BELOW the candlestick chart
-# No session state errors!
-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -15,9 +10,8 @@ import os
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# ============================================================================
+
 # CONDITIONAL IMPORTS - Handle missing modules gracefully
-# ============================================================================
 
 try:
     from data.data_collector import CryptoDataCollector
@@ -47,9 +41,9 @@ except ImportError:
     RL_MODEL_AVAILABLE = False
     RLPricePredictor = None
 
-# ============================================================================
+# 
 # PAGE CONFIG
-# ============================================================================
+# 
 
 st.set_page_config(
     page_title="AI Crypto Trader - RL",
@@ -58,9 +52,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ============================================================================
 # BEAUTIFUL CSS STYLING
-# ============================================================================
+#
 
 st.markdown("""
 <style>
@@ -231,9 +224,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================================
+#
 # CONFIGURATION DICTIONARIES
-# ============================================================================
+#
 
 TIMEFRAMES = {
     '1m': {'name': '⚡ 1 Minute', 'desc': 'Scalping', 'update': 50, 'limit': 200, 'color': '#f44336'},
@@ -275,9 +268,9 @@ RL_MODELS = {
     'a2c': {'name': '⚡ A2C', 'desc': 'Actor-Critic', 'algo': 'Policy Gradient'},
 }
 
-# ============================================================================
+# 
 # SESSION STATE INITIALIZATION - CRITICAL!
-# ============================================================================
+#
 
 # Initialize all keys
 for key in ['collector', 'predictor', 'trading_strategy', 'data_history', 'trading_signals', 'is_trained']:
@@ -303,9 +296,9 @@ if 'current_timeframe' not in st.session_state:
 if 'model_type' not in st.session_state:
     st.session_state.model_type = 'dqn'
 
-# ============================================================================
+# 
 # PRICE HISTORY INITIALIZATION - VERY IMPORTANT!
-# ============================================================================
+# 
 
 if 'price_history' not in st.session_state:
     st.session_state.price_history = []
@@ -319,17 +312,17 @@ if 'previous_price' not in st.session_state:
 if 'price_table_data' not in st.session_state:
     st.session_state.price_table_data = []
 
-# ============================================================================
+# 
 # HEADER
-# ============================================================================
+# 
 
 st.markdown('<div class="main-header">🚀 AI CRYPTO TRADER</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">⚡ RL-Powered Trading | Live Price Updates Every 30 Seconds</div>', unsafe_allow_html=True)
 st.markdown("---")
 
-# ============================================================================
+#
 # SIDEBAR CONFIGURATION
-# ============================================================================
+# 
 
 with st.sidebar:
     st.markdown("## ⚙️ CONFIGURATION")
@@ -521,9 +514,9 @@ with st.sidebar:
     else:
         st.warning("⚠️ Not Initialized")
 
-# ============================================================================
+
 # MAIN CONTENT
-# ============================================================================
+
 
 if not st.session_state.is_trained:
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -579,9 +572,9 @@ else:
                     latest_row = df_features.iloc[-1]
                     current_price = latest_row['close']
                     
-                    # ============================================================
+                
                     # ADD TO PRICE HISTORY
-                    # ============================================================
+                    
                     st.session_state.price_history.append(current_price)
                     st.session_state.time_history.append(datetime.now())
                     
@@ -615,10 +608,9 @@ else:
                     else:
                         action = 'HOLD'
                         formatted_signal = {'action': 'HOLD', 'message': 'Ready to trade'}
-                    
-                    # ============================================================
+
                     # DISPLAY TRADING SIGNAL
-                    # ============================================================
+                 
                     
                     coin_symbol = symbol.split('/')[0]
                     
@@ -648,9 +640,8 @@ else:
                     
                     st.markdown("---")
                     
-                    # ============================================================
                     # CANDLESTICK CHART
-                    # ============================================================
+                    # 
                     
                     st.markdown(f"### 📈 {symbol} - {tf_config['name']} Chart")
                     
@@ -703,9 +694,8 @@ else:
                     
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # ============================================================
+                    
                     # LIVE PRICE UPDATE SECTION - BELOW CANDLESTICK CHART
-                    # ============================================================
                     
                     st.markdown(f"### 📊 Live Price Update - {symbol}")
                     st.markdown(f'<div class="price-update">💰 Current Price: <strong>${current_price:,.2f}</strong> | Last Updated: {datetime.now().strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
@@ -722,14 +712,9 @@ else:
                             st.markdown(f'<div class="price-update">📉 Price Change: <strong style="color: #ff6b6b;">${price_change:,.2f} ({price_change_pct:.2f}%)</strong></div>', unsafe_allow_html=True)
                     
                     st.markdown("---")
-                    
-                    # ============================================================
                     # REAL-TIME PRICE CHART - BELOW EVERYTHING ELSE
-                    # ============================================================
-
-                    # ============================================================
+            
                     # PRICE TABLE (Instead of chart!)
-                    # ============================================================
 
                     st.markdown("---")
                     st.markdown("### 📊 Price Updates Table (Last 30 Updates)")
@@ -799,9 +784,7 @@ else:
                     st.session_state.previous_price = current_price
                                     
                     
-                    # ============================================================
                     # METRICS
-                    # ============================================================
                     
                     st.markdown("### 📊 Market Metrics")
                     cols = st.columns(5)
@@ -883,10 +866,7 @@ try:
 except ImportError:
     RL_MODEL_AVAILABLE = False
     RLPricePredictor = None
-
-# ============================================================================
 # PAGE CONFIG
-# ============================================================================
 
 st.set_page_config(
     page_title="AI Crypto Trader - RL",
@@ -895,9 +875,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ============================================================================
 # BEAUTIFUL CSS STYLING
-# ============================================================================
 
 st.markdown("""
 <style>
@@ -1068,9 +1046,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================================
 # CONFIGURATION DICTIONARIES
-# ============================================================================
+
 
 TIMEFRAMES = {
     '1m': {'name': '⚡ 1 Minute', 'desc': 'Scalping', 'update': 50, 'limit': 200, 'color': '#f44336'},
@@ -1112,9 +1089,8 @@ RL_MODELS = {
     'a2c': {'name': '⚡ A2C', 'desc': 'Actor-Critic', 'algo': 'Policy Gradient'},
 }
 
-# ============================================================================
 # SESSION STATE INITIALIZATION - CRITICAL!
-# ============================================================================
+
 
 # Initialize all keys
 for key in ['collector', 'predictor', 'trading_strategy', 'data_history', 'trading_signals', 'is_trained']:
@@ -1140,9 +1116,7 @@ if 'current_timeframe' not in st.session_state:
 if 'model_type' not in st.session_state:
     st.session_state.model_type = 'dqn'
 
-# ============================================================================
 # PRICE HISTORY INITIALIZATION - VERY IMPORTANT!
-# ============================================================================
 
 if 'price_history' not in st.session_state:
     st.session_state.price_history = []
@@ -1150,17 +1124,15 @@ if 'price_history' not in st.session_state:
 if 'time_history' not in st.session_state:
     st.session_state.time_history = []
 
-# ============================================================================
 # HEADER
-# ============================================================================
+
 
 st.markdown('<div class="main-header">🚀 AI CRYPTO TRADER</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">⚡ RL-Powered Trading | Live Price Updates Every 30 Seconds</div>', unsafe_allow_html=True)
 st.markdown("---")
 
-# ============================================================================
 # SIDEBAR CONFIGURATION
-# ============================================================================
+
 
 with st.sidebar:
     st.markdown("## ⚙️ CONFIGURATION")
@@ -1352,9 +1324,7 @@ with st.sidebar:
     else:
         st.warning("⚠️ Not Initialized")
 
-# ============================================================================
 # MAIN CONTENT
-# ============================================================================
 
 if not st.session_state.is_trained:
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -1409,10 +1379,9 @@ else:
                 if len(df_features) > 0:
                     latest_row = df_features.iloc[-1]
                     current_price = latest_row['close']
-                    
-                    # ============================================================
+
                     # ADD TO PRICE HISTORY
-                    # ============================================================
+                  
                     st.session_state.price_history.append(current_price)
                     st.session_state.time_history.append(datetime.now())
                     
@@ -1446,11 +1415,9 @@ else:
                     else:
                         action = 'HOLD'
                         formatted_signal = {'action': 'HOLD', 'message': 'Ready to trade'}
-                    
-                    # ============================================================
+
                     # DISPLAY TRADING SIGNAL
-                    # ============================================================
-                    
+
                     coin_symbol = symbol.split('/')[0]
                     
                     st.markdown(f"### 🎯 {coin_symbol} - {tf_config['name']} Signal")
@@ -1478,10 +1445,9 @@ else:
                             st.metric("⏱️ Hold", formatted_signal.get('hold_time', 'N/A'))
                     
                     st.markdown("---")
-                    
-                    # ============================================================
+
                     # CANDLESTICK CHART
-                    # ============================================================
+
                     
                     st.markdown(f"### 📈 {symbol} - {tf_config['name']} Chart")
                     
@@ -1534,9 +1500,8 @@ else:
                     
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # ============================================================
+
                     # LIVE PRICE UPDATE SECTION - BELOW CANDLESTICK CHART
-                    # ============================================================
                     
                     st.markdown(f"### 📊 Live Price Update - {symbol}")
                     st.markdown(f'<div class="price-update">💰 Current Price: <strong>${current_price:,.2f}</strong> | Last Updated: {datetime.now().strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
@@ -1554,9 +1519,8 @@ else:
                     
                     st.markdown("---")
                     
-                    # ============================================================
+
                     # REAL-TIME PRICE CHART - BELOW EVERYTHING ELSE
-                    # ============================================================
                     
                     st.markdown("### 📈 Price Chart (Real-time Updates Every 30 Seconds)")
                     
@@ -1591,11 +1555,9 @@ else:
                         st.info("Price history will appear as updates come in...")
                     
                     st.markdown("---")
-                    
-                    # ============================================================
+    
                     # METRICS
-                    # ============================================================
-                    
+
                     st.markdown("### 📊 Market Metrics")
                     cols = st.columns(5)
                     with cols[0]:
