@@ -43,8 +43,12 @@ STOCK_ALL = STOCK_SYMBOLS + [
     "XLC", "SMH", "SOXX", "ARKK", "GLD", "SLV", "TLT", "HYG", "LQD", "UUP", "USO", "IBIT"]
 
 # Bars per year, used to annualise returns/volatility.
+INTERVAL_SECONDS = {"1m": 60, "3m": 180, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 BARS_PER_YEAR = {
+    ("crypto", "1m"): 525_600, ("crypto", "3m"): 175_200, ("crypto", "15m"): 35_040, ("crypto", "30m"): 17_520,
     ("crypto", "1h"): 24 * 365, ("crypto", "4h"): 6 * 365, ("crypto", "1d"): 365,
+    # US stocks trade 6.5 hours (390 minutes) a day, 252 days a year.
+    ("stock", "1m"): 390 * 252, ("stock", "3m"): 130 * 252, ("stock", "15m"): 26 * 252, ("stock", "30m"): 13 * 252,
     ("stock", "1h"): 7 * 252, ("stock", "1d"): 252,
 }
 
@@ -110,7 +114,7 @@ def _finish(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------- crypto ----
 
 _BINANCE_HOSTS = ["https://data-api.binance.vision", "https://api.binance.com", "https://api.binance.us"]
-_INTERVAL_MS = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+_INTERVAL_MS = {k: v * 1000 for k, v in INTERVAL_SECONDS.items()}
 
 
 def _binance(symbol: str, interval: str, bars: int) -> pd.DataFrame:
@@ -144,9 +148,10 @@ def _binance(symbol: str, interval: str, bars: int) -> pd.DataFrame:
 
 
 def _coinbase(symbol: str, interval: str, bars: int) -> pd.DataFrame:
-    gran = {"1h": 3600, "1d": 86400}.get(interval)
-    if gran is None:  # Coinbase has no 4h granularity; resample from 1h
-        return _resample(_coinbase(symbol, "1h", bars * 4), "4h").iloc[-bars:]
+    gran = {"1m": 60, "15m": 900, "1h": 3600, "1d": 86400}.get(interval)
+    if gran is None:  # Coinbase has no 3m/30m/4h candles: build them exactly from smaller ones
+        base, k = {"3m": ("1m", 3), "30m": ("15m", 2), "4h": ("1h", 4)}[interval]
+        return _resample(_coinbase(symbol, base, bars * k), {"3m": "3min", "30m": "30min", "4h": "4h"}[interval]).iloc[-bars:]
     rows, end = [], pd.Timestamp.utcnow().floor(f"{gran}s")
     while len(rows) < bars:
         start = end - pd.Timedelta(seconds=gran * 300)
@@ -165,7 +170,9 @@ def _coinbase(symbol: str, interval: str, bars: int) -> pd.DataFrame:
 
 
 def _kraken(symbol: str, interval: str, bars: int) -> pd.DataFrame:
-    mins = {"1h": 60, "4h": 240, "1d": 1440}[interval]
+    if interval == "3m":  # Kraken has no 3-minute candles
+        return _resample(_kraken(symbol, "1m", bars * 3), "3min").iloc[-bars:]
+    mins = {"1m": 1, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}[interval]
     pair = {"BTC": "XBT", "DOGE": "XDG"}.get(symbol, symbol) + "USD"
     js = _get("https://api.kraken.com/0/public/OHLC", {"pair": pair, "interval": mins})
     if js.get("error"):
@@ -177,8 +184,15 @@ def _kraken(symbol: str, interval: str, bars: int) -> pd.DataFrame:
 
 
 def _resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    return df.resample(rule, label="left", closed="left").agg(
+    out = df.resample(rule, label="left", closed="left").agg(
         {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
+    # Drop a final bucket that isn't complete yet (e.g. a 3m candle built from only 2 one-minute bars):
+    # a half-formed bar must never reach the signal.
+    if len(df) > 1 and len(out):
+        step = df.index[-1] - df.index[-2]
+        if out.index[-1] + pd.Timedelta(rule) > df.index[-1] + step:
+            out = out.iloc[:-1]
+    return out
 
 
 # ----------------------------------------------------------------- stock ----
@@ -235,7 +249,10 @@ def _yahoo_get(url: str, params: dict, timeout: float = 10):
 
 
 def _yahoo(symbol: str, interval: str, bars: int) -> pd.DataFrame:
-    rng = {"1d": "max", "1h": "730d"}[interval]
+    if interval == "3m":  # Yahoo has no 3-minute candles: build them from 1-minute ones
+        return _resample(_yahoo(symbol, "1m", bars * 3), "3min").iloc[-bars:]
+    # Yahoo keeps 1m bars for 7 days and 15m/30m bars for 60 days.
+    rng = {"1d": "max", "1h": "730d", "1m": "7d", "15m": "60d", "30m": "60d"}[interval]
     last_err = None
     for host in ("query1", "query2"):
         try:
@@ -259,8 +276,8 @@ def _yahoo(symbol: str, interval: str, bars: int) -> pd.DataFrame:
                 reg = meta["currentTradingPeriod"]["regular"]
                 if time.time() < reg["end"] and len(df) and df.index[-1] >= pd.Timestamp(reg["start"], unit="s", tz="UTC").normalize():
                     df = df.iloc[:-1]
-            elif interval == "1h":
-                df = df[df.index + pd.Timedelta(hours=1) <= pd.Timestamp.utcnow()]
+            elif interval != "1d":  # drop the still-forming intraday candle
+                df = df[df.index + pd.Timedelta(seconds=INTERVAL_SECONDS[interval]) <= pd.Timestamp.utcnow()]
             return df.iloc[-bars:]
         except Exception as e:
             last_err = e
@@ -313,9 +330,8 @@ def _synthetic(inst: Instrument, bars: int) -> pd.DataFrame:
     import numpy as np
     seed = int(hashlib.sha1(f"{inst.symbol}{inst.interval}".encode()).hexdigest()[:8], 16)
     rng = np.random.default_rng(seed)
-    base_vol = (0.035 if inst.asset_class == "crypto" else 0.014) * np.sqrt(
-        {"1h": 1 / 24, "4h": 1 / 6, "1d": 1}[inst.interval])
-    step = {"1h": "1h", "4h": "4h", "1d": "1D"}[inst.interval]
+    base_vol = (0.035 if inst.asset_class == "crypto" else 0.014) * np.sqrt(INTERVAL_SECONDS[inst.interval] / 86400)
+    step = f"{INTERVAL_SECONDS[inst.interval]}s"
     idx = pd.date_range(end=pd.Timestamp.utcnow().floor(step) - pd.Timedelta(step), periods=bars, freq=step)
     var, drift, out, prev = base_vol ** 2, 0.0, [], 100.0 * (1 + seed % 50)
     for _ in range(bars):

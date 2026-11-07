@@ -131,6 +131,24 @@ def walk_forward(X: pd.DataFrame, fwd: pd.Series, cfg: ModelConfig) -> WalkForwa
     return res
 
 
+def calibrate(proba: pd.Series, fwd: pd.Series, p_now: float, min_n: int = 300) -> tuple[float, dict]:
+    """Platt scaling fitted on this market's own out-of-sample walk-forward predictions.
+
+    A raw ensemble probability of 0.58 may historically have come true 53% of the
+    time; the calibrated value says 0.53. Uses only past OOS data, so no leakage."""
+    if len(proba) < min_n:
+        return p_now, {"applied": False, "reason": f"needs {min_n} out-of-sample bars, has {len(proba)}"}
+    eps = 1e-4
+    logit = lambda p: np.log(np.clip(p, eps, 1 - eps) / (1 - np.clip(p, eps, 1 - eps)))
+    y = (fwd.values > 0).astype(int)
+    lr = LogisticRegression(C=1.0).fit(logit(proba.values).reshape(-1, 1), y)
+    cal = float(lr.predict_proba(np.array([[logit(p_now)]]))[0, 1])
+    before = float(brier_score_loss(y, proba.values))
+    after = float(brier_score_loss(y, lr.predict_proba(logit(proba.values).reshape(-1, 1))[:, 1]))
+    return cal, {"applied": True, "raw": float(p_now), "calibrated": cal, "brier_raw": before, "brier_cal": after,
+                 "slope": float(lr.coef_[0, 0]), "n": int(len(proba))}
+
+
 def classification_metrics(p: pd.Series, fwd: pd.Series, horizon: int = 1) -> dict:
     y = (fwd > 0).astype(int).values
     pv = p.values

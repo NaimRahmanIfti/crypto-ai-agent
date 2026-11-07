@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 0l8 8-8 8-8-8z' fill='%238C7BFF'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body class="booting">
   <canvas id="bg3d" aria-hidden="true"></canvas>
@@ -47,8 +47,20 @@
     </div>
   </nav>
 
-  <main class="grid">
-    <section class="card glass hero" id="heroCard">
+  <div class="views glass" id="views" role="tablist" aria-label="Sections">
+    <button data-view="overview" class="on">Overview</button>
+    <button data-view="timeframes">Timeframes</button>
+    <button data-view="why">Why</button>
+    <button data-view="economy">Economy</button>
+    <button data-view="markets">All markets</button>
+    <button data-view="news">News</button>
+    <button data-view="record">Track record</button>
+    <button data-view="lab">Model lab</button>
+  </div>
+
+  <main class="grid" id="main">
+    <!-- ============ Overview ============ -->
+    <section class="card glass hero" id="heroCard" data-view="overview">
       <div class="card-h"><h3>Systematic signal</h3><span class="tag">backtested</span></div>
       <div class="hero-head">
         <div>
@@ -67,89 +79,161 @@
       </div>
       <div class="action" id="action">—</div>
       <p class="reason" id="reason"></p>
-      <div class="levels" id="levels"></div>
+      <details class="more"><summary>Entry, stop and sizing</summary><div class="levels" id="levels"></div></details>
     </section>
 
-    <section class="card glass chart-card">
+    <section class="card glass chart-card" data-view="overview">
       <div class="card-h"><h3>Price and model signal</h3><span class="hover" id="hoverInfo"></span></div>
       <canvas id="candles"></canvas>
     </section>
 
-    <section class="card glass full" id="desk">
-      <div class="card-h"><h3>Why, and what happens next</h3><span class="tag" id="sessTag"></span></div>
+    <section class="card glass full" id="desk" data-view="overview">
+      <div class="card-h"><h3>The verdict</h3><span class="tag" id="sessTag"></span></div>
       <div class="desk-top">
         <div class="verdict-box">
           <div class="verdict" id="verdict">—</div>
           <div class="meter"><div class="meter-fill" id="meter"></div><div class="meter-mid"></div></div>
           <div class="meter-lbl"><span>Bearish</span><span>Neutral</span><span>Bullish</span></div>
         </div>
-        <p class="summary" id="summary"></p>
+        <div class="takeaways" id="whyTakeaways"></div>
       </div>
       <div class="horizons" id="horizons"></div>
-      <h4 class="sub">Scenarios</h4>
-      <div class="scenarios" id="scenarios"></div>
+      <button class="link-btn" data-goto="why">See every reason, scenarios and key levels</button>
+    </section>
+
+    <!-- ============ Timeframes ============ -->
+    <section class="card glass full" id="mtfCard" data-view="timeframes">
+      <div class="card-h"><h3>Every timeframe</h3><span class="tag" id="mtfTag">1 minute to 1 week</span></div>
+      <p class="lead" id="mtfVerdict"></p>
+      <div class="tf-grid" id="mtfTable"></div>
+    </section>
+
+    <!-- ============ Why ============ -->
+    <section class="card glass full" data-view="why">
+      <div class="card-h"><h3>Every reason behind the call</h3><span class="tag">click a reason for the detail</span></div>
+      <p class="lead" id="summary"></p>
       <div class="desk-grid">
         <div>
-          <h4>Bullish factors</h4><div class="factors" id="bullF"></div>
-          <h4>Bearish factors</h4><div class="factors" id="bearF"></div>
-          <h4>Neutral</h4><div class="factors" id="neutF"></div>
+          <h4><span class="dotc up"></span>Pushing up</h4><div class="factors" id="bullF"></div>
+          <h4><span class="dotc down"></span>Pushing down</h4><div class="factors" id="bearF"></div>
+          <h4><span class="dotc amber"></span>Not deciding either way</h4><div class="factors" id="neutF"></div>
         </div>
         <div>
-          <h4>Key levels</h4><div class="levels-map" id="levelsMap"></div>
           <h4>What would change the view</h4><p class="invalid" id="invalid"></p>
-          <h4>News flow <small id="newsNote"></small></h4>
-          <div class="themes" id="newsThemes"></div>
-          <div class="news" id="news"></div>
+          <h4>Key levels</h4><div class="levels-map" id="levelsMap"></div>
         </div>
       </div>
+    </section>
+
+    <section class="card glass full" data-view="why">
+      <div class="card-h"><h3>What could happen next</h3><span class="tag">probabilities sum to 100%</span></div>
+      <div class="scenarios" id="scenarios"></div>
+    </section>
+
+    <section class="card glass full" data-view="why">
+      <div class="card-h"><h3>News about this market</h3><span class="tag" id="newsNote"></span></div>
+      <div class="themes" id="newsThemes"></div>
+      <div class="news" id="news"></div>
       <p class="disclaimer" id="deskNote"></p>
     </section>
 
-    <section class="card glass full" id="macroCard">
+    <!-- ============ Economy ============ -->
+    <section class="card glass full" id="macroCard" data-view="economy">
       <div class="card-h"><h3>World economy</h3><span class="tag" id="macroTag">loading</span></div>
       <div class="macro-top">
         <div class="regime-badge" id="macroRegime">—</div>
-        <p class="summary" id="macroSummary"></p>
+        <div class="takeaways" id="econTakeaways"></div>
       </div>
-      <div class="macro-grid">
+      <p class="lead small" id="macroSummary"></p>
+    </section>
+
+    <section class="card glass full" data-view="economy">
+      <div class="card-h"><h3>Economy dashboard</h3><span class="tag">FRED, Treasury, BLS, Cboe, NY Fed</span></div>
+      <div class="econ" id="econ"></div>
+    </section>
+
+    <section class="card glass full" data-view="economy">
+      <div class="card-h"><h3>What markets are signalling</h3><span class="tag">cross-asset regime, click for detail</span></div>
+      <div class="factors" id="macroComps"></div>
+      <div id="cryptoRegimeWrap" hidden>
+        <h4>Crypto market regime <small id="cryptoRegimeScore"></small></h4>
+        <div class="factors" id="cryptoComps"></div>
+      </div>
+    </section>
+
+    <section class="card glass" data-view="economy">
+      <div class="card-h"><h3>Coming up</h3></div>
+      <div class="calendar" id="calendar"></div>
+    </section>
+
+    <section class="card glass chart-card" data-view="economy">
+      <div class="card-h"><h3>Macro headlines</h3></div>
+      <div class="news" id="macroNews"></div>
+    </section>
+
+    <!-- ============ All markets ============ -->
+    <section class="card glass full" id="marketsCard" data-view="markets">
+      <div class="card-h"><h3 id="marketsTitle">All markets</h3><span class="tag" id="marketsTag">loading</span></div>
+      <div class="mk-controls">
+        <input id="mkSearch" placeholder="Filter by symbol or name" aria-label="Filter markets" autocomplete="off">
+        <select id="mkSignal" aria-label="Signal filter">
+          <option value="">All signals</option><option value="long">Long signals only</option><option value="short">Short signals only</option>
+        </select>
+        <select id="mkSector" aria-label="Sector filter" hidden><option value="">All sectors</option></select>
+        <span class="mk-count" id="mkCount"></span>
+      </div>
+      <div class="table-wrap tall"><table class="scan markets" id="mkTable"></table></div>
+      <div class="mk-pager"><button id="mkPrev">Previous</button><span id="mkPage"></span><button id="mkNext">Next</button></div>
+      <p class="disclaimer" id="mkNote"></p>
+    </section>
+
+    <!-- ============ News ============ -->
+    <section class="card glass full" id="newsCard" data-view="news">
+      <div class="card-h"><h3>Breaking news</h3><span class="tag" id="newsTag">refreshes every 3 minutes</span></div>
+      <div class="seg news-tabs" id="newsTabs" role="tablist">
+        <button data-topic="geopolitics" class="on">Geopolitics</button><button data-topic="macro">Economy</button>
+        <button data-topic="markets">Companies and markets</button><button data-topic="crypto">Crypto</button>
+      </div>
+      <div class="themes" id="feedThemes"></div>
+      <div class="news feed" id="feed"></div>
+    </section>
+
+    <!-- ============ Track record ============ -->
+    <section class="card glass full" id="learnCard" data-view="record">
+      <div class="card-h"><h3>Track record and learning</h3><span class="tag" id="learnTag">every call is checked</span></div>
+      <p class="lead" id="learnSummary"></p>
+      <div class="desk-grid">
         <div>
-          <h4>Cross-asset regime signals</h4>
-          <div class="factors" id="macroComps"></div>
-          <div id="cryptoRegimeWrap" hidden>
-            <h4>Crypto market regime <small id="cryptoRegimeScore"></small></h4>
-            <div class="factors" id="cryptoComps"></div>
-          </div>
+          <h4>Live hit rate by signal</h4><div class="bars" id="learnKinds"></div>
+          <h4>Biggest mistakes, and what the bot learned</h4><div class="factors" id="learnMisses"></div>
         </div>
         <div>
-          <h4>Economy dashboard</h4>
-          <div class="econ" id="econ"></div>
-          <h4>Coming up</h4>
-          <div class="calendar" id="calendar"></div>
-          <h4>Macro headlines</h4>
-          <div class="news" id="macroNews"></div>
+          <h4>Probability calibration</h4><div class="kpis" id="learnCal"></div>
+          <h4>Which factors have actually worked</h4><div class="bars" id="learnSkill"></div>
         </div>
       </div>
     </section>
 
-    <section class="card glass">
+    <!-- ============ Model lab ============ -->
+    <section class="card glass" data-view="lab">
       <div class="card-h"><h3>Model accuracy, out of sample</h3><span class="tag">purged walk-forward</span></div>
       <div class="kpis" id="valKpis"></div>
       <div class="bars" id="confBars"></div>
     </section>
 
-    <section class="card glass">
+    <section class="card glass" data-view="lab">
       <div class="card-h"><h3>Is 60% really 60%?</h3><span class="tag">calibration</span></div>
       <canvas id="calib"></canvas>
     </section>
 
-    <section class="card glass">
+    <section class="card glass" data-view="lab">
       <div class="card-h"><h3>Market regime</h3></div>
       <div class="kpis" id="regime"></div>
       <h4 class="sub">What drives the model</h4>
       <div class="bars" id="features"></div>
     </section>
 
-    <section class="card glass full">
+    <section class="card glass full" data-view="lab">
       <div class="card-h"><h3>Backtest after costs</h3><span class="tag" id="btTag"></span></div>
       <div class="bt">
         <canvas id="equity"></canvas>
@@ -157,7 +241,7 @@
       </div>
     </section>
 
-    <section class="card glass full">
+    <section class="card glass full" data-view="lab">
       <div class="card-h"><h3>Universe scan</h3><span class="tag" id="scanTag">from scripts/evaluate.py</span></div>
       <div class="table-wrap"><table class="scan" id="scan"></table></div>
     </section>
@@ -169,6 +253,6 @@
   </footer>
 
   <div class="loader hide" id="loader"><div class="ring"></div><span id="loaderText">Training models</span></div>
-  <script type="module" src="app.js?v=5"></script>
+  <script type="module" src="app.js?v=9"></script>
 </body>
 </html>

@@ -7,7 +7,13 @@ async function loadThree() {
   catch { return await import('./vendor/three.module.min.js'); }
 }
 
-const COLORS = { up: 0x3df5c0, down: 0xff5c7a, neutral: 0xffc25c, accent: 0x8c7bff };
+// camera x, y, z and look-at height per view
+const VIEW_CAMS = {
+  overview: [0, 4, 22, 1.5], timeframes: [-12, 5, 17, 2], why: [9, 3, 14, 2.5], economy: [0, 16, 24, 0],
+  markets: [-7, 2, 26, 1], news: [11, 8, 19, 2], record: [0, -1, 17, 2.5], lab: [7, 11, 23, 1],
+};
+
+const COLORS = { up: 0x34c79a, down: 0xe5677a, neutral: 0xd9a75b, accent: 0x6e8bff };
 const ease = t => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
 const back = t => { const c = 1.7; t = Math.min(1, Math.max(0, t)); return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
 
@@ -50,12 +56,12 @@ export class Scene3D {
 
   _buildGrid() {
     const g = new THREE.GridHelper(160, 80, 0x2a3570, 0x141a3a);
-    g.position.y = -4; g.material.transparent = true; g.material.opacity = 0.55;
+    g.position.y = -4; g.material.transparent = true; g.material.opacity = 0.3;
     this.grid = g; this.scene.add(g);
   }
 
   _buildParticles() {
-    const n = 1800, pos = new Float32Array(n * 3);
+    const n = 1100, pos = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
       pos[i * 3] = (Math.random() - 0.5) * 120;
       pos[i * 3 + 1] = Math.random() * 50 - 6;
@@ -64,12 +70,12 @@ export class Scene3D {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     // Two-tone particles (ion violet / sky) for depth.
-    const col = new Float32Array(n * 3), a = new THREE.Color(0x9f92ff), b = new THREE.Color(0x7fd6ff);
+    const col = new Float32Array(n * 3), a = new THREE.Color(0x8d9be0), b = new THREE.Color(0x8fb4d9);
     for (let i = 0; i < n; i++) { const c = Math.random() < 0.6 ? a : b; col.set([c.r, c.g, c.b], i * 3); }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     this.particleHome = pos.slice();
     this.particles = new THREE.Points(geo, new THREE.PointsMaterial({
-      size: 0.1, vertexColors: true, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+      size: 0.08, vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending }));
     this.scene.add(this.particles);
   }
 
@@ -100,8 +106,8 @@ export class Scene3D {
     const lo = Math.min(...data.map(b => b.l)), hi = Math.max(...data.map(b => b.h));
     const scale = 9 / (hi - lo || 1);
     const R = 15, span = Math.PI * 1.15, start = Math.PI / 2 + span / 2;
-    const upM = new THREE.MeshStandardMaterial({ color: COLORS.up, emissive: COLORS.up, emissiveIntensity: 0.55, metalness: 0.3, roughness: 0.35 });
-    const dnM = new THREE.MeshStandardMaterial({ color: COLORS.down, emissive: COLORS.down, emissiveIntensity: 0.55, metalness: 0.3, roughness: 0.35 });
+    const upM = new THREE.MeshStandardMaterial({ color: COLORS.up, emissive: COLORS.up, emissiveIntensity: 0.3, metalness: 0.3, roughness: 0.45 });
+    const dnM = new THREE.MeshStandardMaterial({ color: COLORS.down, emissive: COLORS.down, emissiveIntensity: 0.3, metalness: 0.3, roughness: 0.45 });
     const wickM = new THREE.MeshBasicMaterial({ color: 0x8b95c9, transparent: true, opacity: 0.6 });
     const pts = [];
     data.forEach((b, i) => {
@@ -156,6 +162,12 @@ export class Scene3D {
     }
   }
 
+  // Each view gets its own camera angle; the camera glides there, so switching
+  // views feels like moving around the same 3D space.
+  setView(name) {
+    this.view = VIEW_CAMS[name] || VIEW_CAMS.overview;
+  }
+
   setSignal(tone, exposure) {
     this.targetColor.set(tone === 'up' ? COLORS.up : tone === 'down' ? COLORS.down : COLORS.neutral);
     this.conf = Math.max(0, Math.min(1, exposure));
@@ -191,10 +203,13 @@ export class Scene3D {
     if (this.intro) {
       this._introTick(t);
     } else {
-      this.camera.position.x += (this.mouse.x * 6 - this.camera.position.x) * 0.03;
-      this.camera.position.y += (4 - this.mouse.y * 3 - this.camera.position.y) * 0.03;
-      this.camera.position.z += (22 - this.camera.position.z) * 0.05;
-      this.camera.lookAt(0, 1.5, 0);
+      const v = this.view || VIEW_CAMS.overview;
+      this.camera.position.x += (v[0] + this.mouse.x * 6 - this.camera.position.x) * 0.03;
+      this.camera.position.y += (v[1] - this.mouse.y * 3 - this.camera.position.y) * 0.03;
+      this.camera.position.z += (v[2] - this.camera.position.z) * 0.03;
+      this.look = this.look || { y: 1.5 };
+      this.look.y += (v[3] - this.look.y) * 0.03;
+      this.camera.lookAt(0, this.look.y, 0);
     }
     this.renderer.render(this.scene, this.camera);
   }

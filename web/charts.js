@@ -1,5 +1,5 @@
 // Small dependency-free canvas charts.
-const C = { up: '#22e3a0', down: '#ff4d6d', accent: '#6c8cff', amber: '#ffb547', grid: 'rgba(140,155,255,0.08)', text: '#8b95c9' };
+const C = { up: '#34C79A', down: '#E5677A', accent: '#6E8BFF', amber: '#D9A75B', grid: 'rgba(255,255,255,0.06)', text: '#7E88A8' };
 
 function setup(canvas) {
   const r = canvas.getBoundingClientRect(), dpr = Math.min(devicePixelRatio, 2);

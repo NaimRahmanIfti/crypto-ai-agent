@@ -31,7 +31,9 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 from engine import data as D
+from engine import journal, markets, news
 from engine.macro import calendar, crypto_regime, crypto_regime_peek, macro_peek, macro_snapshot
+from engine.mtf import matrix as mtf_matrix
 from engine.pipeline import analyze
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -52,6 +54,7 @@ def _source_mtime() -> float:
 
 
 STARTED_CODE = _source_mtime()
+_mtf_memo: dict = {}
 STARTED_AT = time.time()
 
 
@@ -128,6 +131,21 @@ class Handler(SimpleHTTPRequestHandler):
             if url.path == "/api/crypto_regime":
                 c = crypto_regime_peek()
                 return self._json(c if c is not None else {"ok": False, "building": True})
+            if url.path == "/api/markets":
+                asset = q.get("asset", "crypto")
+                if asset not in INTERVALS:
+                    return self._json({"error": "Unknown asset class."}, 400)
+                return self._json(markets.screener(
+                    asset, q=q.get("q", "")[:40], sort=q.get("sort", "rank"), desc=q.get("desc") == "1",
+                    offset=max(0, int(q.get("offset", 0))), limit=min(200, max(1, int(q.get("limit", 50)))),
+                    signal=q.get("signal", ""), sector=q.get("sector", "")[:60]))
+            if url.path == "/api/news":
+                topic = q.get("topic", "markets")
+                if topic not in news.FEEDS:
+                    return self._json({"error": f"Topic must be one of {', '.join(news.FEEDS)}."}, 400)
+                return self._json(news.feed(topic))
+            if url.path == "/api/journal":
+                return self._json(journal.track_record(q.get("asset") or None, (q.get("symbol") or "").upper() or None))
             if url.path == "/api/report":
                 if os.path.exists(REPORT):
                     with open(REPORT) as f:
@@ -143,6 +161,13 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json({"error": f"Interval must be one of {', '.join(INTERVALS[asset])}."}, 400)
                 horizon = max(1, min(20, int(q.get("horizon", 1))))
                 return self._json(analyze(symbol, asset, interval, horizon))
+            if url.path == "/api/mtf":  # timeframe table refreshes every minute without re-running the model
+                hit = _mtf_memo.get((symbol, asset))
+                if hit and time.time() - hit[0] < 20:
+                    return self._json(hit[1])
+                m = mtf_matrix(symbol, asset)
+                _mtf_memo[(symbol, asset)] = (time.time(), m)
+                return self._json(m)
             if url.path == "/api/quote":
                 return self._json(D.quote(D.Instrument(symbol, asset, "1d")))
             return self._json({"error": "not found"}, 404)
@@ -171,6 +196,23 @@ def warm_up():
             print(f"warm-up {sym}: {e}")
 
 
+def resolver_loop():
+    """Every 20 minutes, check every due prediction in the journal against what the market did."""
+    try:
+        journal.regrade()  # apply the current grading rules to past calls
+    except Exception as e:
+        print(f"journal regrade: {e}")
+    time.sleep(60)
+    while True:
+        try:
+            n = journal.resolve_due()
+            if n:
+                print(f"journal: resolved {n} predictions")
+        except Exception as e:
+            print(f"journal resolver: {e}")
+        time.sleep(1200)
+
+
 def _try(fn):
     try:
         fn()
@@ -190,4 +232,6 @@ if __name__ == "__main__":
         raise
     print(f"Quant AI Terminal -> http://localhost:{port}" + ("   [SYNTHETIC DEMO DATA]" if D.DEMO else ""))
     threading.Thread(target=warm_up, daemon=True).start()
+    markets.start_scanner()
+    threading.Thread(target=resolver_loop, daemon=True).start()
     srv.serve_forever()

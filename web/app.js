@@ -1,5 +1,5 @@
-import { Scene3D } from './scene3d.js?v=5';
-import { candleChart, equityChart, calibrationChart } from './charts.js?v=5';
+import { Scene3D } from './scene3d.js?v=9';
+import { candleChart, equityChart, calibrationChart } from './charts.js?v=9';
 
 const $ = id => document.getElementById(id);
 const state = { asset: 'crypto', symbol: 'BTC', interval: '1d', horizon: 1, universe: null, last: null, forming: null, livePrice: null };
@@ -7,7 +7,7 @@ const pct = (v, d = 1) => v == null ? '—' : `${(v * 100).toFixed(d)}%`;
 const num = (v, d = 2) => v == null ? '—' : v.toFixed(d);
 const money = v => v == null ? '—' : v >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
   : v >= 1 ? v.toFixed(2) : v.toPrecision(4);
-const SIG = { up: '#3DF5C0', down: '#FF5C7A', amber: '#FFC25C', accent: '#8C7BFF' };
+const SIG = { up: '#34C79A', down: '#E5677A', amber: '#D9A75B', accent: '#6E8BFF' };
 const esc = t => String(t ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const vTone = v => /BUY/.test(v) ? 'up' : /SELL|AVOID|REDUCE/.test(v) ? 'down' : 'amber';
 const toneCls = t => t === 'bull' ? 'up' : t === 'bear' ? 'down' : 'amber';
@@ -146,6 +146,7 @@ async function load() {
     render(d);
     setStatus(`${d.provider}, ${d.compute_seconds}s`, 'live');
     startLive();
+    startMtfLive();
   } catch (e) {
     if (seq !== loadSeq) return;
     setStatus('error', 'err');
@@ -159,7 +160,7 @@ async function load() {
 
 // Clear every panel so a failed load never leaves another market's numbers on screen.
 function showError(msg) {
-  clearInterval(liveTimer); $('live').textContent = ''; state.forming = null;
+  clearInterval(liveTimer); clearInterval(mtfTimer); $('live').textContent = ''; state.forming = null;
   $('heroCard').style.setProperty('--sig', SIG.down);
   $('sym').textContent = `${state.symbol}, ${state.asset === 'crypto' ? 'crypto' : 'stock'}, ${state.interval}`;
   ['price', 'chg', 'meta', 'hoverInfo', 'summary', 'invalid', 'newsNote', 'deskNote', 'sessTag', 'btTag'].forEach(id => $(id).textContent = '');
@@ -168,8 +169,9 @@ function showError(msg) {
   const hint = /429|rate limit/i.test(msg) ? 'The data provider is rate-limiting this connection. Wait a few minutes or switch market.'
     : /unavailable|HTTP/i.test(msg) ? 'Run python3 scripts/diagnose.py to see which data source is failing.' : '';
   $('reason').innerHTML = `<span class="err-box"><b>${esc(msg)}</b>${esc(hint)}</span>`;
-  ['levels', 'valKpis', 'confBars', 'btStats', 'regime', 'features', 'horizons', 'scenarios', 'bullF', 'bearF', 'neutF', 'levelsMap', 'news', 'newsThemes']
-    .forEach(id => $(id).innerHTML = '');
+  ['levels', 'valKpis', 'confBars', 'btStats', 'regime', 'features', 'horizons', 'scenarios', 'bullF', 'bearF', 'neutF', 'levelsMap', 'news', 'newsThemes',
+    'mtfTable', 'learnKinds', 'learnMisses', 'learnCal', 'learnSkill'].forEach(id => $(id).innerHTML = '');
+  ['mtfVerdict', 'learnSummary'].forEach(id => $(id).textContent = '');
   $('verdict').textContent = '—';
   ['candles', 'calib', 'equity'].forEach(id => { const c = $(id); c.getContext('2d').clearRect(0, 0, c.width, c.height); });
 }
@@ -191,7 +193,10 @@ function render(d) {
     $('chg').textContent = `${d.change_pct >= 0 ? '+' : ''}${d.change_pct.toFixed(2)}% last bar`;
     $('chg').className = `chg ${d.change_pct >= 0 ? 'up' : 'down'}`;
   }
-  $('meta').textContent = `${d.bars.toLocaleString()} candles from ${d.start.slice(0, 10)} to ${d.end.slice(0, 10)}`;
+  const age = d.data_age_seconds ?? 0;
+  const fresh = age < 3600 ? 'up to date' : age < 86400 ? `${Math.round(age / 3600)}h behind` : `${Math.round(age / 86400)} days behind`;
+  $('meta').innerHTML = `${d.bars.toLocaleString()} candles from ${d.start.slice(0, 10)} to ${d.end.slice(0, 10)}, from ${esc(d.provider)} ` +
+    `<span class="fresh ${age < 3600 ? 'ok' : 'stale'}">(${fresh})</span>`;
   $('pUp').textContent = pct(s.exposure, 0);
   $('gaugeArc').style.strokeDashoffset = 314 * (1 - s.exposure);
   $('action').textContent = s.action;
@@ -232,10 +237,28 @@ function render(d) {
   $('features').innerHTML = d.features.slice(0, 10).map(f => `<div class="bar"><span>${f.feature.replace(/_/g, ' ')}</span><div class="track"><div class="fill" style="width:${f.importance / maxI * 100}%"></div></div><span>${pct(f.importance, 1)}</span></div>`).join('');
 
   renderDesk(d.analysis, d.last_price);
+  renderMtf(d.mtf);
+  renderLearning(d);
   paint3d(d);
 }
 
-const factorHtml = f => `<div class="factor ${f.tone}"><div><b>${esc(f.name)}</b><span class="sc">${f.score >= 0 ? '+' : ''}${f.score.toFixed(2)}</span></div><div>${esc(f.text)}</div></div>`;
+// First sentence as the one-line takeaway; the rest opens on click. ('. ' keeps decimals like 3.1 intact.)
+const firstSentence = t => { const i = (t || '').search(/\.\s/); return i < 0 ? (t || '') : t.slice(0, i + 1); };
+const restOf = t => (t || '').slice(firstSentence(t).length).trim();
+const CHIP = { bull: 'Bullish', bear: 'Bearish', neutral: 'Neutral', unknown: 'No data' };
+const barHtml = s => {
+  const v = Math.max(-1, Math.min(1, s || 0)), w = Math.abs(v) * 50, left = v >= 0 ? 50 : 50 - w;
+  return `<span class="fx-bar" title="strength ${v >= 0 ? '+' : ''}${v.toFixed(2)}"><i style="left:${left}%;width:${w}%;background:${v >= 0 ? SIG.up : SIG.down}"></i></span>`;
+};
+const factorHtml = (f, chips = CHIP) => {
+  const rest = restOf(f.text);
+  return `<details class="fx ${f.tone}"><summary><span class="fx-name">${esc(f.name)}</span>${barHtml(f.score)}
+    <span class="fx-head">${esc(firstSentence(f.text))}</span><span class="chip ${f.tone}">${chips[f.tone] || f.tone}</span></summary>
+    ${rest ? `<p>${esc(rest)}</p>` : ''}</details>`;
+};
+const ECON_CHIP = { bull: 'Supportive', bear: 'Concerning', neutral: 'Neutral', unknown: 'No data' };
+const takeawayHtml = items => items.filter(Boolean).map(([tone, text, sub]) =>
+  `<div class="tk ${tone}"><i>${tone === 'bull' ? '▲' : tone === 'bear' ? '▼' : '●'}</i><div>${esc(text)}${sub ? `<small>${esc(sub)}</small>` : ''}</div></div>`).join('');
 const newsHtml = items => items.length ? items.map(n => {
   const ago = n.t ? Math.max(1, Math.round((Date.now() / 1000 - n.t) / 3600)) : null;
   return `<a href="${esc(safeLink(n.link))}" target="_blank" rel="noopener noreferrer"><i class="${n.sentiment > 0 ? 'p' : n.sentiment < 0 ? 'n' : ''}"></i>
@@ -248,9 +271,18 @@ function renderDesk(a, price) {
   $('meter').style.left = `${Math.max(2, Math.min(98, 50 + a.score * 100))}%`;
   $('summary').textContent = a.summary;
   $('sessTag').textContent = `${a.session.label}, ${a.session.next_event}`;
-  $('horizons').innerHTML = a.horizons.map(h => `<div class="hz" style="--hz:${SIG[vTone(h.verdict)]}">
-      <small>${esc(h.title)}</small><b>${esc(h.verdict)}</b><p>${esc(h.text)}</p>
-      ${h.range_68 ? `<div class="rng">68% range ${money(h.range_68[0])} to ${money(h.range_68[1])}, model P(up) ${pct(h.p_up)}</div>` : ''}</div>`).join('');
+  // The three things to know: strongest reason for, strongest against, and where the view breaks.
+  const strongest = t => a.factors.filter(f => f.tone === t).sort((x, y) => Math.abs(y.score) - Math.abs(x.score))[0];
+  const up = strongest('bull'), dn = strongest('bear');
+  $('whyTakeaways').innerHTML = takeawayHtml([
+    up && ['bull', `${up.name}: ${firstSentence(up.text)}`, 'strongest reason to be bullish'],
+    dn && ['bear', `${dn.name}: ${firstSentence(dn.text)}`, 'strongest reason to be cautious'],
+    ['neutral', firstSentence(a.invalidation), 'what would prove this view wrong'],
+  ]);
+  $('horizons').innerHTML = a.horizons.map(h => `<details class="hz" style="--hz:${SIG[vTone(h.verdict)]}">
+      <summary><small>${esc(h.title)}</small><b>${esc(h.verdict)}</b>
+      ${h.range_68 ? `<div class="rng">Expected range ${money(h.range_68[0])} to ${money(h.range_68[1])}, model P(up) ${pct(h.p_up)}</div>` : ''}
+      <span class="more-hint">Why</span></summary><p>${esc(h.text)}</p></details>`).join('');
   const sc = a.scenarios || [];
   const scTone = n => /Bull/.test(n) ? SIG.up : /Bear/.test(n) ? SIG.down : SIG.accent;
   $('scenarios').innerHTML = sc.map(x => `<div class="scn" style="--sc:${scTone(x.name)}">
@@ -258,9 +290,10 @@ function renderDesk(a, price) {
       <div class="scn-bar"><div style="width:${x.p}%"></div></div>
       <p>${esc(x.text)}</p><small>Target ${money(x.target)}. Invalidated by ${esc(x.invalidation.replace(/\.$/, '').toLowerCase())}.</small></div>`).join('');
   const by = t => a.factors.filter(f => f.tone === t).sort((x, y) => Math.abs(y.score) - Math.abs(x.score));
-  $('bullF').innerHTML = by('bull').map(factorHtml).join('') || '<div class="empty">None right now.</div>';
-  $('bearF').innerHTML = by('bear').map(factorHtml).join('') || '<div class="empty">None right now.</div>';
-  $('neutF').innerHTML = by('neutral').map(factorHtml).join('');
+  // Arrow wrappers matter: .map(factorHtml) would pass the index as the chip-label argument.
+  $('bullF').innerHTML = by('bull').map(f => factorHtml(f)).join('') || '<div class="empty">None right now.</div>';
+  $('bearF').innerHTML = by('bear').map(f => factorHtml(f)).join('') || '<div class="empty">None right now.</div>';
+  $('neutF').innerHTML = by('neutral').map(f => factorHtml(f)).join('');
   const L = a.levels, touch = r => `${r.touches} touch${r.touches > 1 ? 'es' : ''}`;
   const rows = [
     ...L.resistance.slice().reverse().map(r => ['r', `Resistance, ${touch(r)}`, r.price]),
@@ -317,8 +350,27 @@ function renderMacro(m, c) {
   }
   $('macroTag').textContent = m.as_of ? `updated ${m.as_of}` : 'world economy';
   const wait = m.building ? '<div class="empty">Downloading, usually under a minute on first start.</div>' : '';
-  $('macroComps').innerHTML = (m.components || []).map(x => factorHtml({ ...x, score: x.score, tone: x.ok ? x.tone : 'neutral' })).join('') || wait || '<div class="empty">No cross-asset data.</div>';
-  $('econ').innerHTML = (m.economy || []).map(e => `<div class="eco ${e.tone}"><small>${esc(e.name)}</small><b>${esc(e.value ?? '—')}</b><p>${esc(e.text)}</p></div>`).join('') || wait;
+  const comps = (m.components || []).map(x => ({ ...x, tone: x.ok ? x.tone : 'unknown' }));
+  $('macroComps').innerHTML = comps.map(x => factorHtml(x, ECON_CHIP)).join('') || wait || '<div class="empty">No cross-asset data.</div>';
+  $('econ').innerHTML = (m.economy || []).map(e => {
+    const rest = restOf(e.text);
+    return `<details class="eco ${e.tone}"><summary><div class="eco-top"><small>${esc(e.name)}</small><span class="chip ${e.tone}">${ECON_CHIP[e.tone] || 'Neutral'}</span></div>
+      <b>${esc(e.value ?? '—')}</b><div class="eco-head">${esc(firstSentence(e.text))}</div></summary>${rest ? `<p>${esc(rest)}</p>` : ''}</details>`;
+  }).join('') || wait;
+  // Key takeaways: the regime's posture, plus the most supportive and most worrying signals.
+  if (m.ok) {
+    const ranked = [...comps.filter(x => x.ok), ...(m.economy || []).filter(e => e.value).map(e => ({ name: e.name, text: e.text, tone: e.tone,
+      score: e.tone === 'bull' ? 0.5 : e.tone === 'bear' ? -0.5 : 0 }))];
+    const best = ranked.filter(x => x.tone === 'bull').sort((a, b) => b.score - a.score)[0];
+    const worst = ranked.filter(x => x.tone === 'bear').sort((a, b) => a.score - b.score)[0];
+    $('econTakeaways').innerHTML = takeawayHtml([
+      ['neutral', firstSentence(m.posture), `${m.regime} regime: what it means for positioning`],
+      best && ['bull', `${best.name}: ${firstSentence(best.text)}`, 'most supportive signal'],
+      worst && ['bear', `${worst.name}: ${firstSentence(worst.text)}`, 'biggest concern'],
+    ]);
+  } else {
+    $('econTakeaways').innerHTML = '';
+  }
   $('calendar').innerHTML = (m.calendar || []).map(e => {
     const dt = new Date(`${e.date}T12:00:00Z`);
     return `<div class="cal"><b>${dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</b><div>${esc(e.event)}<small>${esc(e.why)}</small></div></div>`;
@@ -332,6 +384,158 @@ function renderMacro(m, c) {
       tone: x.score >= 60 ? 'bull' : x.score < 40 ? 'bear' : 'neutral' })).join('');
   } else wrap.hidden = true;
 }
+
+// ---------------------------------------------------------------- every timeframe
+const lblTone = l => /LONG/.test(l) ? 'up' : /SHORT/.test(l) ? 'down' : 'amber';
+const sbar = s => {
+  const w = Math.abs(s) * 50, left = s >= 0 ? 50 : 50 - w;
+  return `<span class="sbar"><i style="left:${left}%;width:${w}%;background:${s >= 0 ? SIG.up : SIG.down}"></i></span>`;
+};
+function renderMtf(m) {
+  if (!m) { $('mtfVerdict').textContent = 'Multi-timeframe data unavailable right now.'; $('mtfTable').innerHTML = ''; return; }
+  $('mtfVerdict').textContent = m.verdict;
+  $('mtfTag').textContent = `confluence ${m.confluence >= 0 ? '+' : ''}${m.confluence.toFixed(2)}, ${m.longs} bullish, ${m.shorts} bearish`;
+  const toneVar = l => SIG[lblTone(l)] || SIG.amber;
+  $('mtfTable').innerHTML = m.rows.map(r => r.ok ? `<div class="tf" style="--tfc:${toneVar(r.label)}">
+      <div class="tf-h"><b>${esc(r.tf)}</b><small>${esc(r.style)}</small></div>
+      <div class="tf-l">${esc(r.label)}</div>${barHtml(r.score)}
+      <div class="tf-row"><span>Trend (context)</span><span>${esc((r.trend_label || '').toLowerCase())}</span></div>
+      <div class="tf-row"><span>RSI</span><span>${r.rsi.toFixed(0)}</span></div>
+      <div class="tf-row"><span>Recent move</span><span class="${r.ret_1m >= 0 ? 'up' : 'down'}">${pct(r.ret_1m)}</span></div>
+      <div class="tf-plan">${r.plan.side === 'WAIT' ? esc(r.plan.text)
+        : `<b class="${r.plan.side === 'LONG' ? 'up' : 'down'}">${r.plan.side}</b> at ${money(r.plan.entry)}<br>stop ${money(r.plan.stop)}, targets ${money(r.plan.target_1)} and ${money(r.plan.target_2)}
+           ${r.evidence ? `<small style="display:block;color:var(--muted);margin-top:6px">Evidence: ${esc(r.evidence)}</small>` : ''}`}</div></div>`
+    : `<div class="tf na"><div class="tf-h"><b>${esc(r.tf)}</b><small>${esc(r.style)}</small></div><div class="tf-plan">Not available right now${/stock|Yahoo|429/i.test(r.error) ? ' (stock intraday data only exists during market hours)' : ''}.</div></div>`).join('');
+}
+
+// 1m-30m signals go stale fast: refresh the timeframe table every minute on its own.
+let mtfTimer = null;
+function startMtfLive() {
+  clearInterval(mtfTimer);
+  const d = state.last;
+  if (!d) return;
+  mtfTimer = setInterval(async () => {
+    if (document.hidden || state.last !== d) return;
+    try {
+      const m = await api(`/api/mtf?symbol=${d.symbol}&asset=${d.asset_class}`, 30000);
+      if (state.last === d) { d.mtf = m; renderMtf(m); $('mtfTag').textContent += `, updated ${new Date().toLocaleTimeString()}`; }
+    } catch { /* keep the last table; the next tick retries */ }
+  }, 60000);
+}
+
+// ---------------------------------------------------------------- track record and learning
+function renderLearning(d) {
+  const c = d.calibration || {};
+  $('learnCal').innerHTML = c.applied ? [
+    ['Raw model P(up)', pct(c.raw), 'before calibration'], ['Calibrated P(up)', pct(c.calibrated), 'what the bot now uses'],
+    ['Error before', num(c.brier_raw, 3), 'Brier score'], ['Error after', num(c.brier_cal, 3), `${c.n.toLocaleString()} past predictions`],
+  ].map(([k, v, s]) => `<div class="kpi"><small>${k}</small><b>${v}</b><i>${s}</i></div>`).join('')
+    : `<div class="empty">Not calibrated yet: ${esc(c.reason || 'not enough history')}.</div>`;
+  const j = d.journal;
+  if (!j) { $('learnSummary').textContent = 'The prediction journal is unavailable.'; return; }
+  const a = j.asset_class, mk = j.market;
+  const cls = d.asset_class === 'crypto' ? 'crypto' : 'stock';
+  $('learnTag').textContent = `${a.total.toLocaleString()} ${cls} calls logged, ${a.resolved.toLocaleString()} checked, ${a.open.toLocaleString()} waiting`;
+  $('learnSummary').textContent = a.resolved === 0
+    ? `Learning has started. Every signal the bot gives is written to its journal with the price at that moment, then checked automatically when it comes due (next bar, 5 bars, 10 bars, by timeframe). Hit rates appear here as soon as the first calls resolve, and factor weights start adapting after ${40} checked swing calls.`
+    : `${a.learning_active ? 'Learning is active: factor weights are being adjusted from' : 'Collecting evidence:'} ${a.resolved.toLocaleString()} checked ${cls} calls. ` +
+      `For ${d.symbol}: ${mk.resolved} checked, ${mk.open} waiting. Hit rates below are live, out-of-sample results, not backtests.`;
+  $('learnKinds').innerHTML = a.kinds.length ? a.kinds.map(k => `<div class="bar"><span>${esc(k.name)} (${k.n})</span>
+      <div class="track"><div class="fill" style="width:${k.hit_rate * 100}%"></div><div class="mark" style="left:50%"></div></div>
+      <span class="${k.hit_rate > 0.5 ? 'up' : 'down'}">${pct(k.hit_rate, 0)}</span></div>`).join('')
+    : '<div class="empty">No calls have come due yet.</div>';
+  $('learnMisses').innerHTML = a.misses.length ? a.misses.map(m => factorHtml({ name: `${m.symbol}, ${m.kind}`, score: m.ret, tone: 'bear',
+      text: m.lesson })).join('') : '<div class="empty">No mistakes recorded yet.</div>';
+  const fs = a.factor_skill || [];
+  $('learnSkill').innerHTML = fs.length ? fs.map(f => `<div class="bar"><span>${esc(f.factor)} (n=${f.n})</span>
+      <div class="track"><div class="fill" style="width:${Math.min(100, Math.abs(f.ic) * 200)}%;background:${f.ic >= 0 ? SIG.up : SIG.down}"></div></div>
+      <span>×${f.multiplier.toFixed(2)}</span></div>`).join('')
+    : '<div class="empty">Factor skill appears after 10 checked swing calls; weights adapt after 40.</div>';
+}
+
+// ---------------------------------------------------------------- all markets screener
+const mk = { asset: null, offset: 0, limit: 50, sort: 'rank', desc: false, q: '', signal: '', sector: '', timer: null, total: 0 };
+const big = v => v == null ? '—' : v >= 1e12 ? `${(v / 1e12).toFixed(2)}T` : v >= 1e9 ? `${(v / 1e9).toFixed(1)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(0)}K` : v.toFixed(0);
+async function loadMarkets(reset = false) {
+  if (mk.asset !== state.asset) { Object.assign(mk, { asset: state.asset, offset: 0, sector: '' }); reset = true; }
+  if (reset) mk.offset = 0;
+  clearTimeout(mk.timer);
+  const p = new URLSearchParams({ asset: mk.asset, offset: mk.offset, limit: mk.limit, sort: mk.sort, desc: mk.desc ? 1 : 0,
+    q: mk.q, signal: mk.signal, sector: mk.sector });
+  try {
+    const r = await api(`/api/markets?${p}`, 40000);
+    if (r.asset !== state.asset) return;
+    mk.total = r.matches;
+    const isStock = r.asset === 'stock';
+    $('marketsTitle').textContent = isStock ? `All US stocks (${r.total.toLocaleString()})` : `All crypto (${r.total.toLocaleString()} coins)`;
+    $('marketsTag').innerHTML = `<span class="fresh ${r.age_seconds < 120 ? 'ok' : 'stale'}"><i class="dot"></i>prices ${r.age_seconds < 60 ? 'live' : `${Math.round(r.age_seconds / 60)} min old`}</span>`;
+    const sc = r.scan;
+    $('mkNote').textContent = sc.running ? `Signal scan running: ${sc.done} of ${sc.total} ${isStock ? 'largest stocks' : 'largest coins'} done. Others get a full signal when you open them.`
+      : sc.finished_at ? `Signals cover the ${sc.total} largest ${isStock ? 'stocks' : 'coins'} (daily bars, refreshed every 3 hours). Open any market for its full analysis.`
+      : 'The signal scan starts shortly after the server starts. Open any market for its full analysis now.';
+    const sel = $('mkSector');
+    sel.hidden = !isStock;
+    if (isStock && sel.options.length <= 1) sel.innerHTML = '<option value="">All sectors</option>' + r.sectors.map(s => `<option>${esc(s)}</option>`).join('');
+    const cols = [['rank', '#'], ['symbol', 'Market'], ['price', 'Price'], ['change', isStock ? 'Today' : '24h'], ['volume', 'Volume'],
+      ['mcap', 'Market cap'], ['signal', 'Signal'], ['', 'RSI'], ['', '1 month']];
+    $('mkTable').innerHTML = `<thead><tr>${cols.map(([k, n]) => `<th data-k="${k}" class="${k && k === mk.sort ? 'sorted' : ''}">${n}${k === mk.sort ? (mk.desc ? ' ↓' : ' ↑') : ''}</th>`).join('')}</tr></thead><tbody>` +
+      r.rows.map(x => {
+        const s = x.signal;
+        return `<tr data-s="${esc(x.symbol)}" class="${x.analyzable ? '' : 'na'}" title="${x.analyzable ? 'Open full analysis' : 'Not listed on Binance: price only'}">
+          <td>${x.rank ?? ''}</td><td><b>${esc(x.symbol)}</b><small>${esc(x.name)}${x.sector ? `, ${esc(x.sector)}` : ''}</small></td>
+          <td>${money(x.price)}</td><td class="${(x.change_pct ?? 0) >= 0 ? 'up' : 'down'}">${x.change_pct == null ? '—' : `${x.change_pct >= 0 ? '+' : ''}${x.change_pct.toFixed(2)}%`}</td>
+          <td>${big(x.volume)}</td><td>${big(x.mcap)}</td>
+          <td>${s ? `<span class="pill ${lblTone(s.label)}">${esc(s.label)}</span>` : '<span style="color:var(--muted)">open to analyse</span>'}</td>
+          <td>${s ? s.rsi.toFixed(0) : '—'}</td><td class="${s && s.ret_1m >= 0 ? 'up' : 'down'}">${s ? pct(s.ret_1m) : '—'}</td></tr>`;
+      }).join('') + '</tbody>';
+    const page = Math.floor(mk.offset / mk.limit) + 1, pages = Math.max(1, Math.ceil(r.matches / mk.limit));
+    $('mkPage').textContent = `Page ${page} of ${pages}`;
+    $('mkCount').textContent = `${r.matches.toLocaleString()} shown of ${r.total.toLocaleString()}`;
+    $('mkPrev').disabled = page <= 1; $('mkNext').disabled = page >= pages;
+  } catch (e) {
+    $('marketsTag').textContent = 'unavailable';
+    $('mkTable').innerHTML = `<tr><td class="empty">Market list could not be loaded: ${esc(e.message)}</td></tr>`;
+  }
+  mk.timer = setTimeout(() => loadMarkets(), state.asset === 'crypto' ? 30000 : 60000);  // keep prices live
+}
+let mkDeb;
+$('mkSearch').oninput = e => { clearTimeout(mkDeb); mkDeb = setTimeout(() => { mk.q = e.target.value.trim(); loadMarkets(true); }, 250); };
+$('mkSignal').onchange = e => { mk.signal = e.target.value; loadMarkets(true); };
+$('mkSector').onchange = e => { mk.sector = e.target.value; loadMarkets(true); };
+$('mkPrev').onclick = () => { mk.offset = Math.max(0, mk.offset - mk.limit); loadMarkets(); };
+$('mkNext').onclick = () => { mk.offset += mk.limit; loadMarkets(); };
+$('mkTable').onclick = e => {
+  const th = e.target.closest('th[data-k]');
+  if (th && th.dataset.k) {
+    const k = th.dataset.k;
+    mk.desc = mk.sort === k ? !mk.desc : ['change', 'volume', 'mcap', 'signal', 'price'].includes(k);
+    mk.sort = k; return loadMarkets(true);
+  }
+  const tr = e.target.closest('tr[data-s]');
+  if (tr && !tr.classList.contains('na')) { state.symbol = tr.dataset.s; state.interval = '1d'; load(); scrollTo({ top: 0, behavior: 'smooth' }); }
+};
+
+// ---------------------------------------------------------------- breaking news
+let newsTopic = 'geopolitics', newsTimer = null;
+async function loadFeed() {
+  clearTimeout(newsTimer);
+  try {
+    const f = await api(`/api/news?topic=${newsTopic}`, 30000);
+    $('newsTag').textContent = f.n ? `${f.n} stories, newest ${f.newest_age_min ?? '?'} min ago, from ${(f.sources_ok || []).join(', ') || 'no source'}` : 'no stories right now';
+    $('feedThemes').innerHTML = (f.themes || []).map(t => `<span class="theme ${t.sentiment > 0.05 ? 'bull' : t.sentiment < -0.05 ? 'bear' : ''}">${esc(t.category)} ${t.n}</span>`).join('');
+    $('feed').innerHTML = newsHtml(f.items || []);
+  } catch (e) {
+    $('newsTag').textContent = 'unavailable';
+    $('feed').innerHTML = `<div class="empty">News could not be loaded: ${esc(e.message)}</div>`;
+  }
+  newsTimer = setTimeout(loadFeed, 180000);
+}
+$('newsTabs').onclick = e => {
+  const t = e.target.dataset.topic; if (!t) return;
+  newsTopic = t;
+  document.querySelectorAll('#newsTabs button').forEach(b => b.classList.toggle('on', b.dataset.topic === t));
+  loadFeed();
+};
 
 // ---------------------------------------------------------------- universe scan + ticker
 async function loadScan() {
@@ -357,11 +561,30 @@ async function loadTicker() {
   $('ticker').innerHTML = html ? `<div class="track">${html}${html}</div>` : '';
 }
 
+// ---------------------------------------------------------------- views (one job per screen)
+const VIEWS = ['overview', 'timeframes', 'why', 'economy', 'markets', 'news', 'record', 'lab'];
+function setView(v, push = true) {
+  if (!VIEWS.includes(v)) v = 'overview';
+  document.querySelectorAll('#views button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  document.querySelectorAll('main [data-view]').forEach(s => s.classList.toggle('show', s.dataset.view === v));
+  if (push && location.hash !== `#${v}`) history.replaceState(null, '', `#${v}`);
+  // Canvases can't be measured while hidden: redraw charts once their view is visible.
+  if ((v === 'overview' || v === 'lab') && state.last) requestAnimationFrame(() => render(state.last));
+  scene?.setView?.(v);
+}
+$('views').onclick = e => { const v = e.target.dataset.view; if (v) setView(v); };
+document.addEventListener('click', e => {
+  const g = e.target.closest('[data-goto]');
+  if (g) { setView(g.dataset.goto); scrollTo({ top: $('views').offsetTop - 10, behavior: 'smooth' }); }
+});
+addEventListener('hashchange', () => setView(location.hash.slice(1), false));
+setView(location.hash.slice(1) || 'overview', false);
+
 // ---------------------------------------------------------------- events
 $('assetSeg').onclick = e => {
   const a = e.target.dataset.asset; if (!a || a === state.asset) return;
   state.asset = a; state.symbol = state.universe[a][0]; state.interval = '1d';
-  load(); loadTicker();
+  load(); loadTicker(); loadMarkets(true);
 };
 $('symbols').onclick = e => { const s = e.target.dataset.s; if (s) { state.symbol = s; load(); } };
 $('ticker').onclick = e => { const s = e.target.closest('span')?.dataset.s; if (s) { state.symbol = s; load(); } };
@@ -405,7 +628,7 @@ let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() 
   scene?.playIntro?.(reduceMotion ? 0 : 2.6);
   setTimeout(() => intro.finish(), 6000);  // never hold the page hostage to a slow data source
   checkServer();
-  load(); loadScan(); loadTicker();
+  load(); loadScan(); loadTicker(); loadMarkets(true); loadFeed();
   setInterval(loadTicker, 30000);
   setInterval(checkServer, 60000);
 })();

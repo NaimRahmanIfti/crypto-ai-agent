@@ -158,7 +158,7 @@ def _scenarios(price, s, lv, a_d, plan, sup, resist) -> list[dict]:
 
 def report(df: pd.DataFrame, bench: pd.DataFrame | None, plan: dict, ml: dict, p_up: float,
            asset_class: str, interval: str, bars_per_year: int, news: dict,
-           macro: dict | None = None, cregime: dict | None = None) -> dict:
+           macro: dict | None = None, cregime: dict | None = None, learned: dict | None = None) -> dict:
     c, h, l, v = df["close"], df["high"], df["low"], df["volume"]
     price = float(c.iloc[-1])
     bpd = bars_per_year / (365 if asset_class == "crypto" else 252)  # bars per trading day
@@ -333,6 +333,11 @@ def report(df: pd.DataFrame, bench: pd.DataFrame | None, plan: dict, ml: dict, p
                  "macro": 0.12, "cregime": 0.08},
     }
 
+    # Self-learning: factors with a proven record (from the prediction journal) get
+    # more weight, factors that keep misleading get less. Neutral (1.0) until enough calls resolve.
+    learned = learned or {}
+    weights = {h: {k: wt * learned.get(k, 1.0) for k, wt in w.items()} for h, w in weights.items()}
+
     def blend(w):
         tot = sum(wt for k, wt in w.items() if k in F)
         return sum(F[k] * wt for k, wt in w.items() if k in F) / tot if tot else 0.0
@@ -404,6 +409,9 @@ def report(df: pd.DataFrame, bench: pd.DataFrame | None, plan: dict, ml: dict, p
         "verdict": verdict(overall, asset_class == "stock"), "score": float(overall), "summary": summary,
         "horizons": [next_view, swing_view, long_view], "factors": factors, "levels": lv,
         "invalidation": invalid, "session": sess, "news": news, "scenarios": scenarios,
+        "scores": {"next": float(s_next), "swing": float(s_swing), "long": float(s_long)},
+        "factor_scores": {k: float(v) for k, v in F.items()},
+        "learned_weights": {k: v for k, v in learned.items() if v != 1.0},
         "disclaimer": "Discretionary technical read: rule factors are standard practice but not individually backtested. "
                       "The systematic signal (trend core) is the backtested one.",
     }

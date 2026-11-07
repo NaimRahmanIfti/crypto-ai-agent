@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -13,7 +14,9 @@ from . import data as D
 from .analyst import report as analyst_report
 from .backtest import BacktestConfig, backtest_positions, run_backtest, trend_position
 from .features import add_market_context, build_features, make_target
-from .model import DirectionModel, ModelConfig, WalkForwardResult, momentum_baseline, walk_forward
+from . import journal as J
+from .model import DirectionModel, ModelConfig, WalkForwardResult, calibrate, momentum_baseline, walk_forward
+from .mtf import matrix as mtf_matrix
 from .macro import crypto_regime_peek, macro_peek
 from .news import headlines
 from .signals import regime, trade_plan
@@ -47,6 +50,51 @@ def analyze(symbol: str, asset_class: str, interval: str = "1d", horizon: int = 
         out = _analyze(*key, bars=bars)
         _cache[key] = (time.time(), out)
         return out
+
+
+BAR_S = D.INTERVAL_SECONDS
+# Each timeframe's call is checked after a horizon that suits it: (resolve on, number of those bars).
+MTF_HORIZON = {"1m": ("1m", 15), "3m": ("3m", 10), "15m": ("15m", 8), "30m": ("30m", 8),
+               "1h": ("1h", 6), "4h": ("4h", 6), "1d": ("1d", 5), "1w": ("1d", 20)}
+
+
+def _safe_call(fn, *a):
+    try:
+        return fn(*a)
+    except Exception as e:
+        print(f"{fn.__name__}: {e}")
+        return None
+
+
+def _journal(symbol, asset, interval, horizon, df, p_now, plan, analysis, mtf) -> dict | None:
+    """Resolve this market's due predictions, log today's, return its track record."""
+    try:
+        bar_ts = int(df.index[-1].timestamp())
+        bs = BAR_S[interval]
+        closes = df["close"]
+        J.resolve_with(symbol, asset, interval, closes)
+        price = float(closes.iloc[-1])
+        J.log(symbol, asset, interval, "ml", bar_ts, horizon * bs, price, p_up=p_now, label=f"P(up) {p_now:.0%}")
+        J.log(symbol, asset, interval, "trend", bar_ts, 5 * bs, price, score=float(plan["exposure"]), label=plan["action"])
+        sc = analysis["scores"]
+        J.log(symbol, asset, interval, "desk_next", bar_ts, bs, price, score=sc["next"], label=analysis["horizons"][0]["verdict"])
+        J.log(symbol, asset, interval, "desk_swing", bar_ts, 10 * bs, price, score=sc["swing"],
+              label=analysis["horizons"][1]["verdict"], factors=analysis["factor_scores"])
+        for row in (mtf or {}).get("rows", []):
+            if row.get("ok"):
+                res_iv, n = MTF_HORIZON[row["tf"]]
+                J.log(symbol, asset, interval, f"mtf_{row['tf']}", int(pd.Timestamp(row["as_of"]).timestamp()),
+                      n * BAR_S[res_iv], row["price"], score=row["score"], label=row["label"], res_interval=res_iv)
+        if interval != "1d":
+            daily = D._cache_get(f"{asset}:{symbol}:1d:2000", 86400)
+            if daily is None:
+                daily = D._cache_get(f"{asset}:{symbol}:1d:5000", 86400)
+            if daily is not None:
+                J.resolve_with(symbol, asset, "1d", daily["close"])
+        return {"market": J.track_record(asset, symbol), "asset_class": J.track_record(asset)}
+    except Exception as e:
+        print(f"journal: {e}")
+        return None
 
 
 _MODEL_SRC = [os.path.join(os.path.dirname(__file__), f) for f in ("model.py", "features.py")]
@@ -86,11 +134,17 @@ def _analyze(symbol: str, asset_class: str, interval: str, horizon: int, bars: i
         except D.DataError:
             pass
 
+    # Multi-timeframe matrix and news download in parallel with model training.
+    pool = ThreadPoolExecutor(2)
+    mtf_future = pool.submit(_safe_call, mtf_matrix, symbol, asset_class, df if interval == "1d" else None)
+    news_future = pool.submit(headlines, symbol.upper(), asset_class)
+
     X = add_market_context(build_features(df), bench_df, df)
     fwd = make_target(df, horizon)
     cfg = ModelConfig(horizon=horizon, min_train=min(750, int(len(df) * 0.4)),
                       step=max(20, len(df) // 60))
-    wf, p_now, importance = _model_results(symbol, asset_class, interval, horizon, df, X, fwd, cfg)
+    wf, p_raw, importance = _model_results(symbol, asset_class, interval, horizon, df, X, fwd, cfg)
+    p_now, calibration = calibrate(wf.proba, wf.fwd, p_raw)
 
     bt_cfg = BacktestConfig(horizon=horizon, cost_bps=COST_BPS[asset_class], mode="long_only",
                             target_vol=TARGET_VOL[asset_class], bars_per_year=inst.bars_per_year)
@@ -103,16 +157,22 @@ def _analyze(symbol: str, asset_class: str, interval: str, horizon: int, bars: i
 
     plan = trade_plan(df, p_now, float(trend.iloc[-1]), wf.metrics, TARGET_VOL[asset_class], inst.bars_per_year)
     recent = wf.proba.iloc[-250:]
+    analysis = analyst_report(df, bench_df, plan, wf.metrics, p_now, asset_class, interval,
+                              inst.bars_per_year, news_future.result(),
+                              # Cached-only: the analysis never waits on world-economy downloads.
+                              _safe(macro_peek), _safe(crypto_regime_peek) if asset_class == "crypto" else None,
+                              learned=J.learned_weights(asset_class))
+    mtf = mtf_future.result()
+    pool.shutdown(wait=False)
+    record = _journal(symbol.upper(), asset_class, interval, horizon, df, p_now, plan, analysis, mtf)
     return {
         "symbol": symbol.upper(), "asset_class": asset_class, "interval": interval, "horizon": horizon,
         "provider": provider, "bars": len(df), "start": str(df.index[0]), "end": str(df.index[-1]),
+        "data_age_seconds": int(time.time() - df.index[-1].timestamp()) - BAR_S.get(interval, 0),
         "last_price": float(df["close"].iloc[-1]),
         "change_pct": float((df["close"].iloc[-1] / df["close"].iloc[-2] - 1) * 100),
-        "signal": plan, "regime": regime(df),
-        "analysis": analyst_report(df, bench_df, plan, wf.metrics, p_now, asset_class, interval,
-                                   inst.bars_per_year, headlines(symbol.upper(), asset_class),
-                                   # Cached-only: the analysis never waits on world-economy downloads.
-                                   _safe(macro_peek), _safe(crypto_regime_peek) if asset_class == "crypto" else None),
+        "signal": plan, "regime": regime(df), "mtf": mtf, "calibration": calibration, "journal": record,
+        "analysis": analysis,
         "validation": {k: v for k, v in wf.metrics.items()},
         "momentum_baseline_accuracy": momentum_baseline(wf.fwd, np.log(df["close"]).diff(horizon)),
         "backtest": {"config": bt_cfg.__dict__, **bt, "ml": bt_ml["strategy"], "blend": bt_blend["strategy"]},

@@ -31,6 +31,41 @@ No API keys needed. Offline UI demo with synthetic prices (clearly labelled
 | **Backtest** | Equity curve and stats for trend core vs ML-only vs blend vs buy & hold. |
 | **Universe scan** | Results of `scripts/evaluate.py` across all markets; click a row to open it. |
 
+## Whole-market coverage
+
+- **All crypto:** top 500 coins by market cap (CoinGecko, Binance fallback), live prices, 24h change, volume, market cap.
+- **All US stocks:** every listed stock (~7,000) from Nasdaq's screener, filterable by sector.
+- **Signals for the whole list:** a background scanner computes quick multi-factor signals for the 500 largest
+  stocks and 150 largest coins every 3 hours; any other market gets its full analysis when you open it.
+
+## Every timeframe
+
+Each market gets a 1h / 4h / daily / weekly signal matrix (stocks: 1h / daily / weekly) with a trade plan per
+timeframe (entry, 2-ATR stop, 1.5R and 3R targets) and a confluence verdict. Higher timeframes carry more weight:
+aligned stacks are the highest-quality setups; conflicts mean trade with the higher timeframe and size down.
+
+## How the bot learns from its own mistakes
+
+1. **Prediction journal.** Every analysis logs what the bot predicted (calibrated ML probability, systematic trend
+   position, analyst verdicts, each timeframe's signal) with the price and the time it comes due.
+2. **Automatic checking.** A background job resolves due predictions against what the market actually did.
+3. **Live track record.** Hit rate and average return of following each kind of call, with the biggest misses and a
+   post-mortem of which factors misled it.
+4. **Adaptive factor weights.** Each analyst factor's rank correlation with realised returns is measured; factors that
+   have been right gain weight (up to 1.8x), factors that keep misleading lose weight (down to 0.3x). Neutral until 40
+   checked calls, shrunk towards neutral while the sample is small.
+5. **Probability calibration.** The ML probability is Platt-calibrated on each market's own out-of-sample history, so
+   "60%" means what it says.
+
+This is measured, out-of-sample learning, not a guarantee of accuracy. Markets are close to efficient; the journal
+exists so you can see exactly how good the signals are, live.
+
+## News
+
+Breaking-news feed (geopolitics, economy, companies and markets, crypto) from Google News, BBC, CNBC, MarketWatch,
+CoinDesk and Cointelegraph: last 48 hours, newest first, syndicated duplicates removed, refreshed every 3 minutes.
+Per-market news adds Yahoo Finance (stocks) and coin-filtered crypto feeds.
+
 ## How it works
 
 ```
