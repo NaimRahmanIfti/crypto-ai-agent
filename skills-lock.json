@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "viem-siwe": {
+      "source": "melonask/viem-siwe-skills",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "97628f77b0e28fbbc921e5b9f707572a9096165e372c7b72bb5af96353f1b819"
+    }
+  }
+}

@@ -58,6 +58,24 @@ class Journal(unittest.TestCase):
         self.assertEqual(set(kinds), {"mtf_30m"})
         self.assertEqual(kinds["mtf_30m"]["hit_rate"], 1.0)
 
+    def test_since_filter_separates_old_and_new_rules(self):
+        import time as _t
+        idx = pd.date_range("2026-01-01", periods=10, freq="D", tz="UTC")
+        closes = pd.Series(np.linspace(100, 90, 10), index=idx)          # market falls
+        t0 = int(idx[0].timestamp())
+        J.log("SNC", "crypto", "1d", "mtf_1h", t0, 86400, 100.0, score=0.9, label="STRONG LONG")   # old rule: wrong
+        self.assertIsNone(J.policy_since())
+        _t.sleep(0.01)
+        J.log("SNC", "crypto", "1d", "mtf_15m", t0, 86400, 100.0, score=0.0, label="NO EDGE")      # marks the switch
+        J.log("SNC", "crypto", "1d", "mtf_30m", t0, 86400, 100.0, score=-0.7, label="SHORT (pullback)")  # new rule: right
+        J.resolve_with("SNC", "crypto", "1d", closes)
+        since = J.policy_since()
+        self.assertIsNotNone(since)
+        new = {k["kind"]: k for k in J.track_record("crypto", since=since)["kinds"]}
+        old = {k["kind"]: k for k in J.track_record("crypto")["kinds"]}
+        self.assertEqual(set(new), {"mtf_30m"})           # only the new-rule call counts
+        self.assertEqual(set(old), {"mtf_30m", "mtf_1h"})  # 'all' still includes the old one
+
     def test_regrade_applies_current_rules(self):
         idx = pd.date_range("2026-01-01", periods=10, freq="D", tz="UTC")
         closes = pd.Series(np.linspace(100, 110, 10), index=idx)
@@ -109,7 +127,12 @@ class Timeframes(unittest.TestCase):
         idx = pd.date_range("2024-01-01", periods=300, freq="D", tz="UTC")
         up = pd.DataFrame({"open": np.linspace(10, 40, 300), "close": np.linspace(10.1, 40.1, 300)}, index=idx)
         up["high"], up["low"], up["volume"] = up["close"] * 1.01, up["open"] * 0.99, 1e6
-        self.assertGreater(quick_signal(up)["score"], 0.5)
+        q_up = quick_signal(up)
+        self.assertIn("LONG", q_up["label"])
+        # A straight-line rally has RSI 100, so the don't-chase damping applies (it was silently
+        # skipped before the self-review fixed RSI returning NaN when there were no down moves).
+        self.assertGreater(q_up["score"], 0.25)
+        self.assertLess(q_up["score"], 0.6)
         down = up.iloc[::-1].copy()
         down.index = idx
         q = quick_signal(down)

@@ -40,7 +40,10 @@ def _rsi(c, n=14):
     d = c.diff()
     up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
     dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
-    return 100 - 100 / (1 + up / dn.replace(0, np.nan))
+    # 100*up/(up+dn): all gains -> 100, all losses -> 0, no movement at all -> 50 (neutral)
+    # instead of NaN, which reached the page as null and crashed the timeframe cards.
+    tot = up + dn
+    return (100 * up / tot.replace(0, np.nan)).fillna(50.0)
 
 
 def quick_signal(df: pd.DataFrame) -> dict:

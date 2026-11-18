@@ -91,7 +91,10 @@ def _journal(symbol, asset, interval, horizon, df, p_now, plan, analysis, mtf) -
                 daily = D._cache_get(f"{asset}:{symbol}:1d:5000", 86400)
             if daily is not None:
                 J.resolve_with(symbol, asset, "1d", daily["close"])
-        return {"market": J.track_record(asset, symbol), "asset_class": J.track_record(asset)}
+        since = J.policy_since()
+        return {"market": J.track_record(asset, symbol), "asset_class": J.track_record(asset),
+                # The number that says whether the current rules work: calls made since they took effect.
+                "current_rules": J.track_record(asset, since=since) if since else None, "rules_since": since}
     except Exception as e:
         print(f"journal: {e}")
         return None
@@ -169,6 +172,7 @@ def _analyze(symbol: str, asset_class: str, interval: str, horizon: int, bars: i
         "symbol": symbol.upper(), "asset_class": asset_class, "interval": interval, "horizon": horizon,
         "provider": provider, "bars": len(df), "start": str(df.index[0]), "end": str(df.index[-1]),
         "data_age_seconds": int(time.time() - df.index[-1].timestamp()) - BAR_S.get(interval, 0),
+        "freshness": D.freshness(asset_class, interval, df.index[-1].timestamp()),
         "last_price": float(df["close"].iloc[-1]),
         "change_pct": float((df["close"].iloc[-1] / df["close"].iloc[-2] - 1) * 100),
         "signal": plan, "regime": regime(df), "mtf": mtf, "calibration": calibration, "journal": record,

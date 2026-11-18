@@ -15,7 +15,8 @@ from email.utils import parsedate_to_datetime
 
 import requests
 
-from .data import DEMO, UA
+from . import data as _D
+from .data import UA
 
 NAMES = {"BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "BNB": "BNB Binance coin", "XRP": "XRP Ripple",
          "ADA": "Cardano", "DOGE": "Dogecoin", "AVAX": "Avalanche crypto", "LINK": "Chainlink", "LTC": "Litecoin",
@@ -169,7 +170,7 @@ def headlines(symbol: str, asset_class: str, limit: int = 14, ttl: float = 300) 
     key = (symbol, asset_class)
     if key in _cache and time.time() - _cache[key][0] < ttl:
         return _cache[key][1]
-    if DEMO:
+    if _D.DEMO:  # read live, so switching demo mode on later takes effect
         return {"items": [], "score": 0.0, "n": 0, "note": "news disabled in demo mode"}
     name = NAMES.get(symbol, symbol)
     if asset_class == "macro":
@@ -195,7 +196,7 @@ def feed(topic: str, limit: int = 30, ttl: float = 180) -> dict:
     key = ("__feed__", topic)
     if key in _cache and time.time() - _cache[key][0] < ttl:
         return _cache[key][1]
-    if DEMO:
+    if _D.DEMO:  # read live, so switching demo mode on later takes effect
         return {"items": [], "score": 0.0, "n": 0, "note": "news disabled in demo mode"}
     specs = FEEDS.get(topic, [])
     from concurrent.futures import ThreadPoolExecutor

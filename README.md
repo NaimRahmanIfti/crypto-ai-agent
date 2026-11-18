@@ -20,6 +20,44 @@ python3 server.py                   # http://localhost:8000
 No API keys needed. Offline UI demo with synthetic prices (clearly labelled
 `SYNTHETIC-DEMO`): `QUANT_DEMO=1 python3 server.py`.
 
+## Access: invite only
+
+Nobody can use the terminal, its API or even its page code without an account, and
+there is no public sign-up.
+
+1. **First start.** The server prints a one-time link in its terminal
+   (`http://localhost:8000/setup#token=…`, valid 1 hour). Open it to create the admin
+   account. Only someone who can see the server's terminal can do this; once the admin
+   exists the link is dead. If it expires, restart the server for a new one — or skip
+   the link entirely and run `python3 scripts/admin.py create` in a second terminal.
+   Locked out later? `python3 scripts/admin.py reset you@example.com`.
+2. **Invite people.** Admin → **Team** → enter an email → *Create invite link*. Send
+   the link privately; it works once, expires in 7 days and can be revoked. The invited
+   person picks their own password (12+ characters).
+3. **Forgotten password.** Admin → Team → *Reset link* (single use, 24 hours). Using
+   it signs that person out everywhere.
+4. **Remove someone.** Admin → Team → *Disable*. They are signed out immediately.
+5. **Two-step sign-in.** Anyone → **Account** → set up an authenticator app code.
+
+How it is protected (all in `engine/auth.py`, standard library only): scrypt password
+hashes; random 256-bit tokens stored only as hashes; HttpOnly + SameSite=Strict session
+cookie (12 h idle, 7 days max); a CSRF token on every change; 5 wrong passwords lock the
+account for 15 minutes, with a per-IP limit too; the same error for "no such user" and
+"wrong password"; Host-header and Origin checks against DNS rebinding and cross-site
+posts; strict security headers (CSP, no framing); an audit log of every sign-in,
+failure, invite and change (Team → Security log). Data lives in `state/auth.db`
+(owner-only permissions, not in git).
+
+**Going beyond your own computer.** The server listens on `127.0.0.1` only. To reach it
+from elsewhere, put it behind an HTTPS reverse proxy (Caddy, nginx, Cloudflare Tunnel)
+and start it with your domain allowed and cookies marked secure:
+
+```bash
+ALLOWED_HOSTS=terminal.example.com SECURE_COOKIES=1 python3 server.py
+```
+
+Never expose it over plain HTTP: passwords and session cookies would travel unencrypted.
+
 ## What you see
 
 | Panel | What it tells you |
@@ -65,6 +103,74 @@ exists so you can see exactly how good the signals are, live.
 Breaking-news feed (geopolitics, economy, companies and markets, crypto) from Google News, BBC, CNBC, MarketWatch,
 CoinDesk and Cointelegraph: last 48 hours, newest first, syndicated duplicates removed, refreshed every 3 minutes.
 Per-market news adds Yahoo Finance (stocks) and coin-filtered crypto feeds.
+
+## Research desk (20 agents)
+
+Open the **Agents** view and press *Run the desk*. Each agent has one job and one skill:
+
+| Stage | Agents (skill) |
+|---|---|
+| Route | Navigator (trading-skills-navigator) |
+| Discover | Scanner (trader-scanner), Signal (trading-signals), Breakout planner (breakout-trade-planner), Pairs (pair-trade-screener), Earnings reaction (earnings-trade-analyzer) |
+| Context | News (transformers), Fundamentals (trader-analyst), Congress (trader-pelosi) |
+| Risk | Replay (trader-timemachine), Sizing (trader-budget), Audit (backward-traceability), **Discipline gate** (pre-trade-discipline-gate) |
+| Act | Broker (trader-broker, tickets only), Alerts (trader-alerts) |
+| Learn | Memory (trader-memory-core), Coach (trade-performance-coach), Research (trade-hypothesis-ideator), Pivot (strategy-pivot-designer) |
+| Present | Dashboard (trader-dashboard) |
+
+- **Every signal goes through the discipline gate** before it is shown: GO, review first, blocked, or watchlist,
+  with the reasons. The gate journals each decision to `state/journal/pre-trade-discipline/`.
+- **Nothing places an order.** The Broker agent writes tickets you place yourself in your broker's app.
+- **Risk rules** live in `config/risk.json` (created on first run): $10,000 budget, $100 max loss per trade,
+  20% position cap, 10% cash buffer, 4% total open risk, 24h revenge window, daily/weekly loss halts.
+- **Optional upgrades:** `SEC_USER_AGENT="Your Name you@example.com"` (filed numbers from SEC EDGAR),
+  `X70_API_KEY` (trading-signals second opinion), `pip install transformers torch` (FinBERT sentiment),
+  `pdftotext` (tickers from Congress filings). Everything works without them.
+- Record fills and exits in *Your theses*; the Coach reviews closed trades and the gate's revenge window and
+  circuit breaker use them.
+
+## Demo trading: does the signal actually work?
+
+The **Demo trades** tab answers that with trades, not opinions. While the server runs,
+the desk runs by itself every hour (crypto always, stocks while the US market is open) and
+every idea the discipline gate rules on becomes a paper trade with real prices:
+
+- **Demo account:** GO ideas only, in a $10,000 paper account under the same risk rules as
+  real money ($100 max loss per trade, 4% total open risk, position cap, cash buffer).
+- **Shadow book:** ideas the gate sent to review or blocked are traded too, with no money,
+  so you can see whether blocking them actually avoided losers ("Is the gate right?").
+- **Honest fills:** market entries at the live quote (stocks only while the market is
+  open); breakouts wait for their pivot; exits from hourly highs/lows after the fill; if a
+  bar touches both stop and target, the stop counts; gaps through the stop exit at the worse
+  price; 0.15% (crypto) / 0.05% (stocks) fees and slippage per side; time exit at the
+  plan's horizon.
+- **Promised vs delivered:** the replay's predicted target-hit rate and average R against
+  what the demo trades really did.
+- **It learns:** after 20 closed demo trades, a setup that is losing (average below 0R) is
+  sent to *review first*; after 40 trades with a clear loss (≤ −0.2R, t ≤ −2) the gate
+  **blocks** it. Its shadow trades keep running, so a setup that recovers is let back in.
+  Winning setups show as "real edge". Thresholds: `paper_min_trades`,
+  `paper_block_trades`, `paper_every_minutes` in `config/risk.json`.
+
+**Every style, both directions.** The desk now takes:
+
+| Style | Timeframes | Held for | Long | Short |
+|---|---|---|---|---|
+| Scalp | 1m, 3m, 5m | 30 min to 2 h | pullback, breakout, RSI fade | pullback, breakdown, RSI fade |
+| Day trade | 15m (30m/1h reversals) | 4 to 6 h | same | same |
+| Short swing | 4h | ~2 days | same | same |
+| Swing | daily | 1 to 2 weeks | breakout, bull flag, reclaimed MA20, oversold | breakdown, bear flag, lost MA20, overbought |
+
+The scalp lane rescans 1m–15m charts every 5 minutes; the full desk runs hourly. Stock day
+trades are closed by 15:55 New York time. Where the bot's own research found **no edge**
+(1m/3m/15m/4h, and daily shorts, which turned the backtest from profit to loss), the gate
+sends the idea to *review first*, so it is demo-traded in the **shadow book**. Once its own
+record shows an edge (20+ closed trades, t ≥ 2), it **graduates** to GO and the demo account.
+The gate also flags any trade whose stop is so tight that fees and slippage would cost more
+than 0.5R, which is most 1-minute scalps.
+
+History lives in `state/paper.db`. Turn the autopilot off with the switch on the tab.
+Small samples are mostly luck: judge a setup after 30+ closed trades, not 5.
 
 ## How it works
 
@@ -119,6 +225,10 @@ GET /api/analyze?symbol=BTC&asset=crypto&interval=1d&horizon=1   (interval: cryp
 GET /api/quote?symbol=AAPL&asset=stock
 GET /api/report
 ```
+
+Every endpoint needs a signed-in session (cookie); anything that changes data is a POST
+carrying the `X-CSRF-Token` header from `GET /api/auth/me`. Without a session the API
+answers `401 {"signin": true}`.
 
 ## Limits
 

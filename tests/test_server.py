@@ -43,6 +43,29 @@ class NetworkErrors(unittest.TestCase):
             requests.get = orig
 
 
+class SelfReload(unittest.TestCase):
+    def test_hash_ignores_timestamps_but_sees_content(self):
+        before = server._hash((".py",))
+        path = server.__file__
+        st = os.stat(path)
+        os.utime(path, (st.st_atime, st.st_mtime + 100))      # touch: timestamp changes, content doesn't
+        try:
+            self.assertEqual(server._hash((".py",)), before)
+        finally:
+            os.utime(path, (st.st_atime, st.st_mtime))
+
+    def test_version_endpoint_reports_fingerprints(self):
+        h = server.Handler.__new__(server.Handler)
+        captured = {}
+        h._json = lambda obj, code=200: captured.update(obj)
+        h.path = "/api/version"
+        h.headers = {"Host": "localhost:8000"}
+        h._session = lambda: ({"id": 1, "role": "member"}, "csrf")   # signed in
+        h.do_GET()
+        self.assertTrue(captured["py"] and captured["web"])
+        self.assertIn("reload_error", captured)
+
+
 class MacroCache(unittest.TestCase):
     def setUp(self):
         M._memo.clear()

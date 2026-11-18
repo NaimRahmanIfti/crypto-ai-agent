@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Sign in · Quant AI Terminal</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 0l8 8-8 8-8-8z' fill='%236E8BFF'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css?v=12">
+</head>
+<body class="authpage">
+  <main class="authbox glass">
+    <div class="brand"><span class="logo">◆</span> Quant<b>AI</b></div>
+    <h1 id="title">Sign in</h1>
+    <p class="lead small" id="intro">This terminal is private. Access is by invitation only.</p>
+    <form id="form" autocomplete="on" novalidate>
+      <label id="nameRow" hidden>Your name<input id="name" autocomplete="name" maxlength="80"></label>
+      <label id="emailRow">Email<input id="email" type="email" autocomplete="username" required maxlength="320"></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password" required minlength="12" maxlength="256"></label>
+      <label id="confirmRow" hidden>Confirm password<input id="confirm" type="password" autocomplete="new-password" maxlength="256"></label>
+      <label id="codeRow" hidden>Authenticator code<input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}"></label>
+      <p class="hint" id="hint" hidden>At least 12 characters. A short sentence works well.</p>
+      <p class="err" id="err" role="alert"></p>
+      <button id="submit" type="submit">Sign in</button>
+    </form>
+  </main>
+  <script type="module" src="auth.js?v=12"></script>
+</body>
+</html>

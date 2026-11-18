@@ -43,12 +43,13 @@ STOCK_ALL = STOCK_SYMBOLS + [
     "XLC", "SMH", "SOXX", "ARKK", "GLD", "SLV", "TLT", "HYG", "LQD", "UUP", "USO", "IBIT"]
 
 # Bars per year, used to annualise returns/volatility.
-INTERVAL_SECONDS = {"1m": 60, "3m": 180, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+INTERVAL_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 BARS_PER_YEAR = {
-    ("crypto", "1m"): 525_600, ("crypto", "3m"): 175_200, ("crypto", "15m"): 35_040, ("crypto", "30m"): 17_520,
-    ("crypto", "1h"): 24 * 365, ("crypto", "4h"): 6 * 365, ("crypto", "1d"): 365,
+    ("crypto", "1m"): 525_600, ("crypto", "3m"): 175_200, ("crypto", "5m"): 105_120, ("crypto", "15m"): 35_040,
+    ("crypto", "30m"): 17_520, ("crypto", "1h"): 24 * 365, ("crypto", "4h"): 6 * 365, ("crypto", "1d"): 365,
     # US stocks trade 6.5 hours (390 minutes) a day, 252 days a year.
-    ("stock", "1m"): 390 * 252, ("stock", "3m"): 130 * 252, ("stock", "15m"): 26 * 252, ("stock", "30m"): 13 * 252,
+    ("stock", "1m"): 390 * 252, ("stock", "3m"): 130 * 252, ("stock", "5m"): 78 * 252, ("stock", "15m"): 26 * 252,
+    ("stock", "30m"): 13 * 252,
     ("stock", "1h"): 7 * 252, ("stock", "1d"): 252,
 }
 
@@ -148,7 +149,7 @@ def _binance(symbol: str, interval: str, bars: int) -> pd.DataFrame:
 
 
 def _coinbase(symbol: str, interval: str, bars: int) -> pd.DataFrame:
-    gran = {"1m": 60, "15m": 900, "1h": 3600, "1d": 86400}.get(interval)
+    gran = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400}.get(interval)
     if gran is None:  # Coinbase has no 3m/30m/4h candles: build them exactly from smaller ones
         base, k = {"3m": ("1m", 3), "30m": ("15m", 2), "4h": ("1h", 4)}[interval]
         return _resample(_coinbase(symbol, base, bars * k), {"3m": "3min", "30m": "30min", "4h": "4h"}[interval]).iloc[-bars:]
@@ -172,7 +173,7 @@ def _coinbase(symbol: str, interval: str, bars: int) -> pd.DataFrame:
 def _kraken(symbol: str, interval: str, bars: int) -> pd.DataFrame:
     if interval == "3m":  # Kraken has no 3-minute candles
         return _resample(_kraken(symbol, "1m", bars * 3), "3min").iloc[-bars:]
-    mins = {"1m": 1, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}[interval]
+    mins = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}[interval]
     pair = {"BTC": "XBT", "DOGE": "XDG"}.get(symbol, symbol) + "USD"
     js = _get("https://api.kraken.com/0/public/OHLC", {"pair": pair, "interval": mins})
     if js.get("error"):
@@ -251,8 +252,8 @@ def _yahoo_get(url: str, params: dict, timeout: float = 10):
 def _yahoo(symbol: str, interval: str, bars: int) -> pd.DataFrame:
     if interval == "3m":  # Yahoo has no 3-minute candles: build them from 1-minute ones
         return _resample(_yahoo(symbol, "1m", bars * 3), "3min").iloc[-bars:]
-    # Yahoo keeps 1m bars for 7 days and 15m/30m bars for 60 days.
-    rng = {"1d": "max", "1h": "730d", "1m": "7d", "15m": "60d", "30m": "60d"}[interval]
+    # Yahoo keeps 1m bars for 7 days and 5m/15m/30m bars for 60 days.
+    rng = {"1d": "max", "1h": "730d", "1m": "7d", "5m": "60d", "15m": "60d", "30m": "60d"}[interval]
     last_err = None
     for host in ("query1", "query2"):
         try:
@@ -284,6 +285,32 @@ def _yahoo(symbol: str, interval: str, bars: int) -> pd.DataFrame:
     raise DataError(f"Yahoo unavailable: {last_err}")
 
 
+def _drop_open_session(df: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Remove today's daily bar while the US session is still open (until 16:15 ET),
+    so a half-finished day never reaches features, signals or the journal."""
+    if not len(df):
+        return df
+    from zoneinfo import ZoneInfo
+    et = (now or pd.Timestamp.utcnow()).tz_convert(ZoneInfo("America/New_York"))
+    session_open = et.weekday() < 5 and (et.hour, et.minute) < (16, 15)
+    if session_open and df.index[-1].strftime("%Y-%m-%d") == et.strftime("%Y-%m-%d"):
+        return df.iloc[:-1]
+    return df
+
+
+def freshness(asset: str, interval: str, bar_ts: float, now: float | None = None) -> dict:
+    """Is the newest closed candle the newest that can exist? bar_ts is the candle's open time.
+
+    Crypto trades 24/7: fresh if no full candle is missing. Stocks are allowed the weekend
+    gap (a Friday candle is still the newest on Monday morning)."""
+    now = time.time() if now is None else now
+    bar = INTERVAL_SECONDS[interval]
+    age = now - (bar_ts + bar)            # seconds since that candle closed
+    allowance = bar + 120 if asset == "crypto" else max(bar + 120, 3 * 86400 + 3600)
+    return {"age_seconds": int(max(0, age)), "fresh": bool(age < allowance),
+            "missing_bars": int(max(0, age - (allowance - bar)) // bar) if age >= allowance else 0}
+
+
 def _nasdaq(symbol: str, interval: str, bars: int) -> pd.DataFrame:
     """Nasdaq.com public historical API (no key). ~10y of daily, split-adjusted
     (not dividend-adjusted) bars. Stocks and ETFs use different asset classes."""
@@ -309,7 +336,7 @@ def _nasdaq(symbol: str, interval: str, bars: int) -> pd.DataFrame:
                            "low": [num(x["low"]) for x in rows], "close": [num(x["close"]) for x in rows],
                            "volume": [num(x["volume"]) for x in rows]},
                           index=pd.to_datetime([x["date"] for x in rows], format="%m/%d/%Y", utc=True))
-        return _finish(df.dropna()).iloc[-bars:]
+        return _drop_open_session(_finish(df.dropna())).iloc[-bars:]
     raise DataError("Nasdaq returned no data")
 
 

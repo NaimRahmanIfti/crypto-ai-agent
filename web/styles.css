@@ -78,6 +78,8 @@ body.revealed nav { animation-delay: .08s } body.revealed main { animation-delay
 .banner { margin: 12px 18px 0; padding: 12px 18px; border-radius: var(--r-md); background: rgba(229, 103, 122, 0.12);
   border: 1px solid rgba(229, 103, 122, 0.45); color: #ffd5dd; font-size: 14px; }
 .banner code { background: rgba(0,0,0,.35); padding: 2px 7px; border-radius: 6px; font-family: var(--mono); font-size: 13px; color: white; }
+.banner-btn { margin-left: 10px; background: var(--accent); color: white; border: 0; border-radius: 8px; padding: 6px 14px;
+  font: 600 13px var(--body); cursor: pointer; }
 
 .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin: 12px 18px; padding: 10px 14px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -143,6 +145,11 @@ h4 small { font-weight: 400; color: var(--muted); }
 #calib { width: 100%; height: 230px; display: block; }
 .bt { display: grid; grid-template-columns: 1.7fr 1fr; gap: 18px; align-items: center; }
 #equity { width: 100%; height: 280px; display: block; }
+.eqcanvas { width: 100%; height: 220px; display: block; margin-top: 14px; }
+.eqcanvas[hidden] { display: none; }
+.kpis-wide { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 14px; }
+.switch { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--soft); cursor: pointer; }
+tr.muted td { color: var(--muted); }
 
 .kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .kpi { background: rgba(0, 0, 0, 0.22); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; }
@@ -365,6 +372,57 @@ details.eco p { margin: 0; padding: 0 15px 14px; font-size: 12.5px; color: var(-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ---------- sign-in pages ---------- */
+body.authpage { min-height: 100vh; display: grid; place-items: center;
+  background: radial-gradient(ellipse at 30% 20%, rgba(110,139,255,.18), transparent 55%), var(--ink); }
+.authbox { width: min(420px, 92vw); padding: 28px; }
+.authbox h1 { font: 700 24px var(--display); margin: 18px 0 6px; }
+.authbox form { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.authbox label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--soft); }
+.authbox [hidden] { display: none !important; }
+.authbox input { padding: 10px 12px; font-size: 15px; }
+.authbox button { margin-top: 6px; background: var(--accent); color: white; border: 0; border-radius: 10px; padding: 11px; font: 600 15px var(--body); cursor: pointer; }
+.authbox button:disabled { opacity: .6; cursor: default; }
+.authbox .err { color: #f1b3bd; font-size: 13px; min-height: 18px; margin: 0; }
+.authbox .hint { color: var(--muted); font-size: 12.5px; margin: 0; }
+
+/* ---------- account & team ---------- */
+.userbox { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--soft); white-space: nowrap; }
+.userbox button { background: none; border: 1px solid var(--line); color: var(--soft); border-radius: 8px; padding: 5px 10px; cursor: pointer; font: inherit; }
+.inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.inline-form input, .inline-form select { min-width: 200px; }
+.inline-form button { background: var(--accent); color: white; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; font: 600 13px var(--body); }
+.linkbox { background: rgba(110,139,255,.08); border: 1px solid rgba(110,139,255,.35); border-radius: 10px; padding: 12px; font-size: 13px; color: var(--soft); word-break: break-all; }
+.linkbox code { color: var(--text); font-family: var(--mono); font-size: 12.5px; }
+
+/* ---------- research desk ---------- */
+.ask { display: flex; gap: 8px; flex-wrap: wrap; }
+.ask input { flex: 1; min-width: 260px; padding: 10px 12px; }
+.ask button { background: var(--accent); color: white; border: 0; border-radius: 8px; padding: 0 18px; font: 600 14px var(--body); cursor: pointer; }
+.pipeline { margin-top: 10px; color: var(--soft); font-size: 13.5px; }
+.gsignals { display: flex; flex-direction: column; gap: 8px; }
+details.gsig { border-radius: var(--r-md); border: 1px solid var(--line); border-left: 3px solid var(--gc, var(--muted)); background: rgba(255,255,255,.025); }
+details.gsig.bull { --gc: var(--up); } details.gsig.bear { --gc: var(--down); } details.gsig.neutral { --gc: var(--amber); }
+details.gsig summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 14px; font-size: 13.5px; }
+details.gsig summary::-webkit-details-marker { display: none; }
+details.gsig summary b { font: 700 15px var(--display); }
+.gsetup, .gsize, .godds { color: var(--muted); }
+.glevels { color: var(--soft); }
+.gbody { display: grid; grid-template-columns: 1fr 1.3fr; gap: 20px; padding: 0 14px 14px; font-size: 13px; color: var(--soft); }
+.gbody ul, .gbody ol { margin: 0; padding-left: 18px; line-height: 1.6; }
+.trail li b { color: var(--text); font-weight: 600; margin-right: 4px; }
+.ticket { background: rgba(110,139,255,.08); border: 1px solid rgba(110,139,255,.3); border-radius: 8px; padding: 10px 12px; margin: 0 0 8px; color: var(--text); }
+.gbody code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.roster { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.agent { border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; background: rgba(255,255,255,.025); }
+.agent b { font: 600 14px var(--display); display: block; margin-bottom: 6px; }
+.agent p { margin: 8px 0 4px; font-size: 12.5px; color: var(--soft); line-height: 1.5; }
+.agent small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+a.cg { display: block; padding: 7px 0; color: var(--soft); text-decoration: none; font-size: 13px; border-bottom: 1px solid var(--line); }
+a.cg:hover { color: var(--text); }
+@media (max-width: 1100px) { .roster { grid-template-columns: repeat(2, minmax(0, 1fr)); } .gbody { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .roster { grid-template-columns: 1fr; } }
 
 /* ================= clean theme overrides =================
    One calm accent, muted semantic colours, no neon glows. Placed last so it wins. */

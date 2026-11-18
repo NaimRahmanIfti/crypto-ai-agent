@@ -1,5 +1,5 @@
-import { Scene3D } from './scene3d.js?v=9';
-import { candleChart, equityChart, calibrationChart } from './charts.js?v=9';
+import { Scene3D } from './scene3d.js?v=11';
+import { candleChart, equityChart, calibrationChart } from './charts.js?v=11';
 
 const $ = id => document.getElementById(id);
 const state = { asset: 'crypto', symbol: 'BTC', interval: '1d', horizon: 1, universe: null, last: null, forming: null, livePrice: null };
@@ -19,18 +19,24 @@ let scene = null;
 const sceneReady = new Scene3D().init($('bg3d')).then(s => { scene = s; if (state.last) paint3d(state.last); return s; })
   .catch(e => { console.warn('3D disabled:', e); return null; });
 
-async function api(path, timeoutMs = 90000) {
+async function api(path, timeoutMs = 90000, body = null) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  // Actions that change data are POSTs carrying this session's CSRF token.
+  const opts = body === null ? { signal: ctl.signal } : {
+    method: 'POST', signal: ctl.signal, body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf || '' } };
   let r;
-  try { r = await fetch(path, { signal: ctl.signal }); }
+  try { r = await fetch(path, opts); }
   catch (e) { throw new Error(e.name === 'AbortError' ? `The server took longer than ${timeoutMs / 1000}s to answer. Data sources may be slow; try again.` : 'Cannot reach the server.'); }
   finally { clearTimeout(timer); }
   let js;
   try { js = await r.json(); } catch { throw new Error(`Server returned ${r.status} ${r.statusText}`); }
+  if (r.status === 401 && js.signin) { location.replace('/login'); throw new Error('Signed out.'); }
   if (!r.ok) throw new Error(js.error || r.statusText);
   return js;
 }
+const apiPost = (path, body, timeoutMs = 30000) => api(path, timeoutMs, body || {});
 
 // ---------------------------------------------------------------- boot sequence
 const intro = {
@@ -60,14 +66,29 @@ function loading(on, text = 'Training models') {
 }
 function banner(html) { $('banner').hidden = !html; $('banner').innerHTML = html || ''; }
 
+// The server reloads itself when its code changes. The page remembers the code version it
+// was loaded with and offers a one-click reload when a newer one is running.
+let loadedVersion = null;
 async function checkServer() {
+  let v;
   try {
-    const v = await api('/api/version');
-    if (v.stale) banner('The server is running out-of-date code, so some panels may break. Stop it and start it again: <code>lsof -ti tcp:8000 | xargs kill</code> then <code>python3 server.py</code>');
-    else if (state.universe?.demo) banner('Demo mode: every price on this page is synthetic. Start the server without <code>QUANT_DEMO=1</code> for real markets.');
-    else banner('');
+    v = await api('/api/version', 10000);
   } catch {
-    banner('This page is newer than the server it is talking to. Restart the server: <code>lsof -ti tcp:8000 | xargs kill</code> then <code>python3 server.py</code>');
+    return banner('Cannot reach the server. If it stopped, start it again with <code>python3 server.py</code>; this page reconnects by itself.');
+  }
+  if (!v.py) {  // an old server without self-reload is still running
+    return banner('An older version of the server is still running. Restart it once: <code>lsof -ti tcp:8000 | xargs kill; python3 server.py</code>. After that it updates itself.');
+  }
+  loadedVersion = loadedVersion || v;
+  if (v.reload_error) {
+    banner(`The latest code change has an error, so the server is still running the previous version: <code>${esc(v.reload_error)}</code>`);
+  } else if (v.py !== loadedVersion.py || v.web !== loadedVersion.web) {
+    banner('The app was updated. <button class="banner-btn" id="reloadBtn">Reload to get the new version</button>');
+    $('reloadBtn').onclick = () => location.reload();
+  } else if (state.universe?.demo) {
+    banner('Demo mode: every price on this page is synthetic. Start the server without <code>QUANT_DEMO=1</code> for real markets.');
+  } else {
+    banner('');
   }
 }
 
@@ -193,8 +214,11 @@ function render(d) {
     $('chg').textContent = `${d.change_pct >= 0 ? '+' : ''}${d.change_pct.toFixed(2)}% last bar`;
     $('chg').className = `chg ${d.change_pct >= 0 ? 'up' : 'down'}`;
   }
-  const age = d.data_age_seconds ?? 0;
-  const fresh = age < 3600 ? 'up to date' : age < 86400 ? `${Math.round(age / 3600)}h behind` : `${Math.round(age / 86400)} days behind`;
+  // The newest closed candle can legitimately be up to one candle old (a daily candle closes once a day),
+  // so judge freshness by missing candles, not by age.
+  const fr = d.freshness || { fresh: (d.data_age_seconds ?? 0) < 3600, missing_bars: 0 };
+  const age = fr.fresh ? 0 : 99999;
+  const fresh = fr.fresh ? 'newest closed candle' : `${fr.missing_bars || 1} candle${fr.missing_bars > 1 ? 's' : ''} behind`;
   $('meta').innerHTML = `${d.bars.toLocaleString()} candles from ${d.start.slice(0, 10)} to ${d.end.slice(0, 10)}, from ${esc(d.provider)} ` +
     `<span class="fresh ${age < 3600 ? 'ok' : 'stale'}">(${fresh})</span>`;
   $('pUp').textContent = pct(s.exposure, 0);
@@ -433,13 +457,21 @@ function renderLearning(d) {
     : `<div class="empty">Not calibrated yet: ${esc(c.reason || 'not enough history')}.</div>`;
   const j = d.journal;
   if (!j) { $('learnSummary').textContent = 'The prediction journal is unavailable.'; return; }
-  const a = j.asset_class, mk = j.market;
+  // Default view: only calls made under the current rules, the number that says whether they work.
+  const rulesView = state.learnScope !== 'all' && j.current_rules;
+  const a = rulesView ? j.current_rules : j.asset_class, mk = j.market;
+  const sinceTxt = j.rules_since ? new Date(j.rules_since * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
+  document.querySelectorAll('#learnScope button').forEach(b => b.classList.toggle('on', (b.dataset.scope === 'rules') === !!rulesView));
+  $('learnScope').hidden = !j.current_rules;
   const cls = d.asset_class === 'crypto' ? 'crypto' : 'stock';
-  $('learnTag').textContent = `${a.total.toLocaleString()} ${cls} calls logged, ${a.resolved.toLocaleString()} checked, ${a.open.toLocaleString()} waiting`;
+  $('learnTag').textContent = `${rulesView ? `since ${sinceTxt}: ` : ''}${a.total.toLocaleString()} ${cls} calls logged, ${a.resolved.toLocaleString()} checked, ${a.open.toLocaleString()} waiting`;
   $('learnSummary').textContent = a.resolved === 0
     ? `Learning has started. Every signal the bot gives is written to its journal with the price at that moment, then checked automatically when it comes due (next bar, 5 bars, 10 bars, by timeframe). Hit rates appear here as soon as the first calls resolve, and factor weights start adapting after ${40} checked swing calls.`
     : `${a.learning_active ? 'Learning is active: factor weights are being adjusted from' : 'Collecting evidence:'} ${a.resolved.toLocaleString()} checked ${cls} calls. ` +
       `For ${d.symbol}: ${mk.resolved} checked, ${mk.open} waiting. Hit rates below are live, out-of-sample results, not backtests.`;
+  if (rulesView) $('learnSummary').textContent = `Showing only calls made since the signal fix on ${sinceTxt}, ` +
+    `when 15m/4h stopped making calls and 30m/1h switched to reversal-only. ${a.resolved ? `${a.resolved} of them have been checked so far.` : 'None has come due yet.'} ` +
+    'Switch to "All calls" to include the older rules.';
   $('learnKinds').innerHTML = a.kinds.length ? a.kinds.map(k => `<div class="bar"><span>${esc(k.name)} (${k.n})</span>
       <div class="track"><div class="fill" style="width:${k.hit_rate * 100}%"></div><div class="mark" style="left:50%"></div></div>
       <span class="${k.hit_rate > 0.5 ? 'up' : 'down'}">${pct(k.hit_rate, 0)}</span></div>`).join('')
@@ -561,8 +593,130 @@ async function loadTicker() {
   $('ticker').innerHTML = html ? `<div class="track">${html}${html}</div>` : '';
 }
 
+$('learnScope').onclick = e => {
+  const s = e.target.dataset.scope; if (!s) return;
+  state.learnScope = s;
+  if (state.last) renderLearning(state.last);
+};
+
+// ---------------------------------------------------------------- research desk (20 agents)
+const GATE_TONE = { GO: 'bull', REVIEW_REQUIRED: 'neutral', NO_GO: 'bear', NO_ACTIONABLE_ORDERS: 'unknown' };
+const GATE_LABEL = { GO: 'GO', REVIEW_REQUIRED: 'Review first', NO_GO: 'Blocked', NO_ACTIONABLE_ORDERS: 'Watchlist' };
+let deskTimer = null, deskSeen = null;
+const fmtv = v => typeof v === 'number' ? (Math.abs(v) >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : Number(v.toPrecision(6)).toString()) : esc(v);
+
+async function loadDesk() {
+  clearTimeout(deskTimer);
+  let d;
+  try { d = await api('/api/agents', 15000); } catch (e) { $('deskTag').textContent = 'unavailable'; return; }
+  const st = d.state;
+  $('roster').innerHTML = d.roster.map(a => `<div class="agent"><b>${esc(a.name)}</b><span class="chip neutral">${esc(a.skills[0] || '')}</span>
+      <p>${esc(a.job)}</p>${a.needs ? `<small>${esc(a.needs)}</small>` : ''}${st.timings[a.name] != null ? `<small>last run ${st.timings[a.name]}s</small>` : ''}</div>`).join('');
+  $('pipeline').innerHTML = st.running
+    ? `<span class="ring inline"></span> Running: <b>${esc(st.stage)}</b> (${Math.round(Date.now() / 1000 - st.started)}s)`
+    : st.error ? `<span class="err-box"><b>The last run failed:</b> ${esc(st.error)}</span>` : '';
+  if (d.result && d.result.finished !== deskSeen) { deskSeen = d.result.finished; renderAgentDesk(d.result); }
+  renderAlerts(d.result, d.rung);
+  if (st.running) deskTimer = setTimeout(loadDesk, 2000);
+}
+
+function signalCard(s) {
+  const g = s.gate, v = s.values, tone = GATE_TONE[g.decision] || 'neutral';
+  const rp = s.context.replay;
+  const ticket = (state.deskTickets || []).find(t => t.signal_id === s.id);
+  const levels = s.setup === 'pair_spread'
+    ? `spread z ${fmtv(v.z)} &rarr; target 0, stop ${fmtv(v.stop)}`
+    : `entry ${fmtv(v.entry)} &middot; stop ${fmtv(v.stop)} &middot; target ${fmtv(v.target_1)}`;
+  return `<details class="gsig ${tone}"><summary>
+      <span class="chip ${tone}">${GATE_LABEL[g.decision] || g.decision}</span>
+      <b>${esc(s.symbol)}</b><span class="${s.side === 'LONG' ? 'up' : 'down'}">${s.side}</span>
+      <span class="gsetup">${esc(s.setup.replace(/_/g, ' '))}, ${esc(s.timeframe)}</span>
+      <span class="glevels">${levels}</span>
+      ${v.shares ? `<span class="gsize">${fmtv(v.shares)} ${s.asset === 'stock' ? 'sh' : 'units'}, risk $${fmtv(v.planned_risk)}</span>` : ''}
+      ${rp ? `<span class="godds">target first ${pct(rp.p_target, 0)}, ${rp.expected_r >= 0 ? '+' : ''}${rp.expected_r.toFixed(2)}R</span>` : ''}
+    </summary>
+    <div class="gbody">
+      <div><h4>Gate decision</h4><ul>${g.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>
+        ${ticket ? `<h4>Order ticket (you place it)</h4><p class="ticket">${esc(ticket.text)}</p>
+          ${ticket.order ? `<button class="link-btn copy" data-copy="${esc(JSON.stringify(ticket.order))}">Copy order JSON</button>` : ''}` : ''}</div>
+      <div><h4>How the agents got here</h4><ol class="trail">${s.notes.map(n => `<li><b>${esc(n.agent)}</b> ${esc(n.text)}</li>`).join('')}</ol>
+        <details class="more"><summary>Trace every number</summary><table class="stats">${(s.context.trace || []).map(t =>
+          `<tr><td>${esc(t.name)}</td><td>${fmtv(t.value)}</td><td>${esc(t.source)}</td><td><code>${esc(t.code)}</code></td></tr>`).join('')}</table></details></div>
+    </div></details>`;
+}
+
+function renderAgentDesk(r) {
+  state.deskTickets = r.tickets || [];
+  const c = r.counts || {};
+  $('gateCounts').textContent = `${r.asset}: ${c.GO || 0} GO, ${c.REVIEW_REQUIRED || 0} review, ${c.NO_GO || 0} blocked, ${c.NO_ACTIONABLE_ORDERS || 0} watchlist` +
+    (r.withheld_ungated ? `, ${r.withheld_ungated} withheld (never gated)` : '') + `, ${new Date(r.finished * 1000).toLocaleTimeString()}`;
+  $('gSignals').innerHTML = r.signals.length ? r.signals.map(signalCard).join('')
+    : `<div class="empty">No setups passed the agents this run${r.scan ? ` (${r.scan.scanned} markets scanned, ${r.scan.hits.length} chart setups found)` : ''}. That is a normal answer: no trade is a position too.</div>`;
+  const th = r.theses || [];
+  $('thesesTable').innerHTML = th.length ? `<thead><tr><th>Thesis</th><th>Status</th><th>Plan</th><th>Result</th><th></th></tr></thead><tbody>` +
+    th.slice().reverse().map(t => `<tr><td><b>${esc(t.symbol)}</b> <small style="color:var(--muted)">${esc(t.setup)}, ${esc(t.side)}</small></td>
+      <td>${esc(t.status)}</td><td>entry ${fmtv(t.plan.entry)}, stop ${fmtv(t.plan.stop)}</td>
+      <td>${t.status === 'CLOSED' ? `<span class="${t.pnl >= 0 ? 'up' : 'down'}">$${fmtv(t.pnl)} (${t.r_multiple >= 0 ? '+' : ''}${t.r_multiple}R)</span>` : ''}</td>
+      <td>${t.status === 'ENTRY_READY' || t.status === 'IDEA' ? `<button class="link-btn th" data-act="open" data-id="${esc(t.id)}">I bought it</button>`
+        : t.status === 'ACTIVE' ? `<button class="link-btn th" data-act="close" data-id="${esc(t.id)}">I closed it</button>` : ''}</td></tr>`).join('') + '</tbody>'
+    : '<tr><td class="empty">No theses yet. Every gated idea is recorded here; mark the ones you actually trade.</td></tr>';
+  const coach = r.coach || {};
+  $('learnBox').innerHTML = `<h4>Coach</h4><p class="lead small">${esc(coach.summary || '')}</p>
+      ${(coach.findings || []).map(f => `<div class="tk neutral"><i>●</i><div>${esc(f)}</div></div>`).join('')}
+      ${(coach.rules || []).length ? `<h4>Next-session rules</h4><ul>${coach.rules.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+    <h4>Research hypotheses</h4>${(r.research || []).map(h => `<details class="fx neutral"><summary><span class="fx-name">${esc(h.verdict)}</span><span></span>
+      <span class="fx-head">${esc(h.hypothesis)}</span><span class="chip neutral">test</span></summary><p>${esc(h.evidence)} Test: ${esc(h.test)} Kill: ${esc(h.kill)}</p></details>`).join('')}
+    <h4>Pivots</h4>${(r.pivots || []).map(p => `<p class="lead small">${esc(p.strategy)}: ${esc(p.evidence)}${p.pivots.length ? ` ${esc(p.pivots.join(' '))}` : ''}</p>`).join('')}`;
+  const parts = [];
+  if (r.pairs?.length) parts.push(`<h4>Pairs (most cointegrated first)</h4><table class="scan"><tr><th>Pair</th><th>Correlation</th><th>ADF t</th><th>Spread z</th><th>Half-life</th></tr>` +
+    r.pairs.slice(0, 10).map(p => `<tr><td>${esc(p.pair)} <small style="color:var(--muted)">${esc(p.group)}</small></td><td>${p.corr.toFixed(2)}</td>
+      <td class="${p.cointegrated ? 'up' : ''}">${p.adf_t.toFixed(2)}</td><td>${p.z >= 0 ? '+' : ''}${p.z.toFixed(2)}</td><td>${isFinite(p.half_life) ? p.half_life.toFixed(0) + 'd' : '—'}</td></tr>`).join('') + '</table>');
+  if (r.earnings?.length) parts.push(`<h4>Recent earnings reactions</h4><table class="scan"><tr><th>Stock</th><th>Grade</th><th>Score</th><th>Gap</th><th>Volume</th></tr>` +
+    r.earnings.slice(0, 12).map(e => `<tr><td>${esc(e.symbol)} <small style="color:var(--muted)">${esc(e.report_date)}</small></td><td>${esc(e.grade)}</td>
+      <td>${e.score.toFixed(0)}</td><td class="${e.gap >= 0 ? 'up' : 'down'}">${pct(e.gap)}</td><td>${e.volume_ratio.toFixed(1)}x</td></tr>`).join('') + '</table>');
+  if (r.congress?.filings) parts.push(`<h4>Congress trade filings</h4><p class="lead small">${esc(r.congress.note)}</p>` +
+    r.congress.filings.slice(0, 10).map(f => `<a class="cg" href="${esc(safeLink(f.link))}" target="_blank" rel="noopener noreferrer">
+      ${f.new ? '<span class="chip bull">new</span>' : ''} ${esc(f.member)} (${esc(f.district || '')}), filed ${esc(f.filed)}
+      ${f.tickers.length ? `: ${esc(f.tickers.join(', '))}` : ''}${f.watched.length ? ` <b class="amber">matches: ${esc(f.watched.join(', '))}</b>` : ''}</a>`).join(''));
+  $('ctxBox').innerHTML = parts.join('') || '<div class="empty">Pairs, earnings and Congress results appear here after a run (earnings and Congress on the Stocks desk).</div>';
+  $('ctxTag').textContent = r.asset === 'stock' ? 'stock desk' : 'crypto desk';
+}
+
+function renderAlerts(r, rung) {
+  const pending = (r && r.alerts) || [];
+  $('alertsList').innerHTML = (rung.length ? rung.slice().reverse().map(a => `<div class="tk bear"><i>!</i><div><b>${esc(a.symbol)}</b> hit its ${esc(a.kind)} (${fmtv(a.level)}) at ${fmtv(a.rang.price)}<small>${esc(a.rang.at)}</small></div></div>`).join('') : '')
+    + (pending.length ? pending.map(a => `<div class="tk neutral"><i>●</i><div>${esc(a.symbol)} ${esc(a.kind)}: rings when price goes ${esc(a.when)} ${fmtv(a.level)}</div></div>`).join('')
+       : '<div class="empty">No alerts. GO signals get stop and target alerts automatically; alerts inform, they never trade.</div>');
+}
+
+$('askForm').onsubmit = async e => {
+  e.preventDefault();
+  const q = $('askInput').value.trim();
+  if (q) {
+    try { const r = await api(`/api/agents/navigate?q=${encodeURIComponent(q)}`); $('askAnswer').textContent = r.answer; } catch { /* routing is optional */ }
+  }
+  const r = await apiPost('/api/agents/run', { asset: state.asset, size: $('deskSize').value }).catch(err => ({ note: err.message }));
+  if (r.note) $('askAnswer').textContent = r.note;
+  loadDesk();
+};
+document.addEventListener('click', async e => {
+  const cp = e.target.closest('.copy');
+  if (cp) { navigator.clipboard?.writeText(cp.dataset.copy); cp.textContent = 'Copied'; return; }
+  const b = e.target.closest('.th');
+  if (!b) return;
+  const opening = b.dataset.act === 'open';
+  const price = prompt(opening ? 'Fill price you got:' : 'Exit price you got:');
+  if (!price) return;
+  const qty = opening ? prompt('Quantity filled:') : '';
+  if (opening && !qty) return;
+  try {
+    await apiPost('/api/agents/thesis', { action: b.dataset.act, id: b.dataset.id, price, qty });
+    deskSeen = null; loadDesk();
+  } catch (err) { alert(err.message); }
+});
+
 // ---------------------------------------------------------------- views (one job per screen)
-const VIEWS = ['overview', 'timeframes', 'why', 'economy', 'markets', 'news', 'record', 'lab'];
+const VIEWS = ['overview', 'timeframes', 'why', 'economy', 'markets', 'news', 'record', 'lab', 'agents', 'paper', 'account', 'team'];
 function setView(v, push = true) {
   if (!VIEWS.includes(v)) v = 'overview';
   document.querySelectorAll('#views button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
@@ -570,6 +724,10 @@ function setView(v, push = true) {
   if (push && location.hash !== `#${v}`) history.replaceState(null, '', `#${v}`);
   // Canvases can't be measured while hidden: redraw charts once their view is visible.
   if ((v === 'overview' || v === 'lab') && state.last) requestAnimationFrame(() => render(state.last));
+  if (v === 'agents') loadDesk();
+  if (v === 'paper') loadPaper();
+  if (v === 'account') loadAccount();
+  if (v === 'team') loadTeam();
   scene?.setView?.(v);
 }
 $('views').onclick = e => { const v = e.target.dataset.view; if (v) setView(v); };
@@ -579,6 +737,215 @@ document.addEventListener('click', e => {
 });
 addEventListener('hashchange', () => setView(location.hash.slice(1), false));
 setView(location.hash.slice(1) || 'overview', false);
+
+// ---------------------------------------------------------------- demo trades (paper trading)
+const rr = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}R`;
+const usd = v => v == null ? '—' : `${v < 0 ? '−' : ''}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const DEC = { GO: 'GO', REVIEW_REQUIRED: 'Review first', NO_GO: 'Blocked' };
+const VERDICT = { edge: ['up', 'real edge'], failing: ['down', 'losing: gate blocks it'], losing: ['amber', 'losing: gate reviews it'],
+  unproven: ['amber', 'no clear edge yet'], 'too few': ['', 'collecting trades'] };
+let paperTimer = null;
+
+async function loadPaper() {
+  clearTimeout(paperTimer);
+  let p;
+  try { p = await api('/api/paper', 20000); }
+  catch (err) { $('paperKpis').innerHTML = `<p class="err">${esc(err.message)}</p>`; return; }
+  const a = p.account;
+  $('paperAuto').checked = !!p.auto;
+  $('paperTag').textContent = p.desk.running ? `desk running: ${p.desk.stage}` :
+    p.auto ? `autopilot on, every ${p.every_minutes} min${p.last_run ? `; last ${new Date(p.last_run.at * 1000).toLocaleTimeString()} (${p.last_run.asset})` : ''}` : 'autopilot off';
+  const ret = (a.balance - a.start) / a.start;
+  const kpi = (label, val, cls = '', sub = '') => `<div class="kpi"><small>${label}</small><b class="${cls}">${val}</b>${sub ? `<i>${sub}</i>` : ''}</div>`;
+  $('paperKpis').innerHTML = [
+    kpi('Balance', usd(a.balance), ret >= 0 ? 'up' : 'down', pct(ret, 2)),
+    kpi('Open P&L', usd(a.unrealised), a.unrealised >= 0 ? 'up' : 'down', `${a.open} open`),
+    kpi('Closed trades', a.n || 0),
+    kpi('Winners', a.n ? pct(a.win_rate, 0) : '—'),
+    kpi('Average trade', a.n ? rr(a.avg_r) : '—', a.avg_r > 0 ? 'up' : a.avg_r < 0 ? 'down' : '', 'R = what was risked'),
+    kpi('Profit factor', a.profit_factor == null ? '—' : num(a.profit_factor), '', 'gains ÷ losses'),
+    kpi('Worst drawdown', a.n ? pct(a.max_drawdown, 1) : '—'),
+    kpi('Stops / targets', a.n ? `${a.stops} / ${a.targets}` : '—'),
+  ].join('');
+  $('paperEquity').hidden = p.equity.length < 2;
+  if (p.equity.length >= 2) equityChart($('paperEquity'), [{ t: p.equity[0].t - 1, s: 1, b: 1 }, ...p.equity]);
+
+  // Promised vs delivered: the replay's predicted odds against what the demo trades actually did.
+  const c = p.calibration, all = [p.account, p.shadow].filter(x => x.n);
+  const n = all.reduce((t, x) => t + x.n, 0);
+  $('paperTruth').innerHTML = !c.n ? '<p class="lead small">No closed demo trades yet. Trades close at their stop, target or time limit; for daily setups that can take days. Hourly crypto setups close within about 6 hours.</p>' :
+    `<p class="lead small">Over ${c.n} closed demo trades (both books), before any trade the desk predicted:</p>
+    <div class="kpis">
+      ${kpi('Target hit: predicted', pct(c.predicted_target, 0))}${kpi('Target hit: actual', pct(c.actual_target, 0), Math.abs(c.actual_target - c.predicted_target) < 0.08 ? 'up' : 'amber')}
+      ${kpi('Average trade: predicted', rr(c.predicted_r))}${kpi('Average trade: actual', rr(c.actual_r), c.actual_r > 0 ? 'up' : 'down', 'after fees and slippage')}
+    </div>
+    <p class="lead small">${c.actual_r > 0 && c.actual_r >= c.predicted_r - 0.1 ? 'So far the signals are delivering roughly what they promise.'
+      : c.actual_r > 0 ? 'Profitable, but below what the replay promised: treat its numbers as optimistic.'
+      : 'So far the signals are <b>not</b> making money after costs. The gate tightens automatically as setups prove themselves losers.'}
+      ${n < 30 ? ' This is still a small sample: under 30 trades, luck dominates.' : ''}</p>`;
+
+  $('paperGate').textContent = p.gate_verdict;
+  $('paperDecisions').innerHTML = `<thead><tr><th>Gate said</th><th>Closed</th><th>Winners</th><th>Average</th><th>Total</th></tr></thead><tbody>${
+    Object.entries(p.by_decision).map(([d, s]) => `<tr><td>${DEC[d]}</td><td>${s.n}</td><td>${s.n ? pct(s.win_rate, 0) : '—'}</td>
+      <td class="${s.avg_r > 0 ? 'up' : s.avg_r < 0 ? 'down' : ''}">${s.n ? rr(s.avg_r) : '—'}</td><td>${s.n ? rr(s.total_r) : '—'}</td></tr>`).join('')}</tbody>`;
+
+  const cell = s => !s.n ? '<td>—</td><td>—</td><td>—</td>'
+    : `<td>${s.n}</td><td>${pct(s.win_rate, 0)}</td><td class="${s.avg_r > 0 ? 'up' : s.avg_r < 0 ? 'down' : ''}">${rr(s.avg_r)}</td>`;
+  $('paperStyles').innerHTML = p.by_style.length
+    ? `<thead><tr><th>Style</th><th>Open now</th><th>Long: closed</th><th>Winners</th><th>Average</th><th>Short: closed</th><th>Winners</th><th>Average</th></tr></thead><tbody>${
+      p.by_style.map(s => `<tr><td><b>${esc(s.style)}</b></td><td>${s.open}</td>${cell(s.long)}${cell(s.short)}</tr>`).join('')}</tbody>`
+    : '<tr><td class="lead small">No demo trades yet.</td></tr>';
+
+  $('paperSetups').innerHTML = p.by_setup.length ? `<thead><tr><th>Setup</th><th>Market</th><th>Closed</th><th>Winners</th><th>Average</th><th>Confidence</th><th>Verdict</th></tr></thead><tbody>${
+    p.by_setup.map(s => { const [cls, txt] = VERDICT[s.verdict] || ['', s.verdict];
+      return `<tr><td>${esc(s.setup.replace(/_/g, ' '))}</td><td>${esc(s.asset)}</td><td>${s.n}${s.n < s.need ? ` <small>of ${s.need}</small>` : ''}</td>
+        <td>${s.n ? pct(s.win_rate, 0) : '—'}</td><td class="${s.avg_r > 0 ? 'up' : s.avg_r < 0 ? 'down' : ''}">${s.n ? rr(s.avg_r) : '—'}</td>
+        <td>${s.t == null ? '—' : `t = ${s.t.toFixed(1)}`}</td><td><span class="tag ${cls}">${txt}</span></td></tr>`; }).join('')}</tbody>`
+    : '<tr><td class="lead small">No demo trades yet. Run the desk from the Agents tab, or leave autopilot on.</td></tr>';
+
+  $('paperOpenTag').textContent = `${p.open.length} open or waiting`;
+  $('paperOpen').innerHTML = p.open.length ? `<thead><tr><th>Market</th><th>Setup</th><th>Style</th><th>Side</th><th>Book</th><th>Status</th><th>Entry</th><th>Stop</th><th>Target</th><th>Now</th><th>Open P&L</th><th>Closes by</th></tr></thead><tbody>${
+    p.open.map(t => `<tr><td><b>${esc(t.symbol)}</b> <small>${esc(t.asset)}</small></td><td>${esc(t.setup.replace(/_/g, ' '))}</td>
+      <td>${esc(t.style)}</td><td class="${t.side === 'LONG' ? 'up' : 'down'}">${esc(t.side)}</td>
+      <td>${t.book === 'account' ? 'account' : `shadow <small>(${DEC[t.decision]})</small>`}</td>
+      <td>${t.status === 'OPEN' ? 'open' : `waiting: ${t.order_type === 'stop' ? 'breakout trigger' : t.order_type === 'open' ? 'market open' : 'price'}`}</td>
+      <td>${money(t.fill ?? t.entry_plan)}</td><td>${t.setup === 'pair_spread' ? `z ${num(t.stop)}` : money(t.stop)}</td>
+      <td>${t.setup === 'pair_spread' ? 'z 0' : money(t.target)}</td><td>${t.setup === 'pair_spread' ? (t.last_price != null ? `z ${num(t.last_price)}` : '—') : money(t.last_price)}</td>
+      <td class="${t.open_r > 0 ? 'up' : t.open_r < 0 ? 'down' : ''}">${t.open_r == null ? '—' : rr(t.open_r)}</td>
+      <td>${t.until ? when(t.until) : '—'}</td></tr>`).join('')}</tbody>`
+    : '<tr><td class="lead small">No open demo trades.</td></tr>';
+
+  $('paperHistory').innerHTML = p.closed.length ? `<thead><tr><th>Closed</th><th>Market</th><th>Setup</th><th>Style</th><th>Side</th><th>Book</th><th>Gate</th><th>Entry</th><th>Exit</th><th>Why</th><th>Result</th><th>P&L</th><th>Best / worst</th></tr></thead><tbody>${
+    p.closed.map(t => t.status === 'CANCELLED' || t.status === 'VOID'
+      ? `<tr class="muted"><td>${when(t.closed)}</td><td><b>${esc(t.symbol)}</b></td><td>${esc(t.setup.replace(/_/g, ' '))}</td><td>${esc(t.style)}</td><td>${esc(t.side)}</td><td>${esc(t.book)}</td><td>${DEC[t.decision] || ''}</td><td colspan="6">${t.status === 'VOID' ? 'voided, not counted' : 'not filled'}: ${esc(t.exit_reason)}</td></tr>`
+      : `<tr><td>${when(t.closed)}</td><td><b>${esc(t.symbol)}</b> <small>${esc(t.asset)}</small></td><td>${esc(t.setup.replace(/_/g, ' '))}</td>
+      <td>${esc(t.style)}</td><td class="${t.side === 'LONG' ? 'up' : 'down'}">${esc(t.side)}</td>
+      <td>${esc(t.book)}</td><td>${DEC[t.decision] || ''}</td><td>${money(t.fill)}</td><td>${money(t.exit)}</td><td>${esc(t.exit_reason)}</td>
+      <td class="${t.r > 0 ? 'up' : 'down'}">${rr(t.r)}</td><td class="${t.pnl > 0 ? 'up' : 'down'}">${usd(t.pnl)}</td>
+      <td>${t.mfe_r == null ? '—' : `${rr(t.mfe_r)} / ${rr(t.mae_r)}`}</td></tr>`).join('')}</tbody>`
+    : '<tr><td class="lead small">No closed demo trades yet.</td></tr>';
+
+  if ($('views').querySelector('button.on')?.dataset.view === 'paper') paperTimer = setTimeout(loadPaper, 30000);
+}
+$('paperAuto').onchange = async e => {
+  try { await apiPost('/api/paper/auto', { on: e.target.checked }); } catch (err) { alert(err.message); }
+  loadPaper();
+};
+$('paperCheck').onclick = async () => {
+  $('paperCheck').disabled = true;
+  try { const r = await apiPost('/api/paper/check', {}, 120000); $('paperCheck').textContent = r.closed ? `${r.closed} closed` : 'Checked'; }
+  catch (err) { alert(err.message); }
+  $('paperCheck').disabled = false;
+  setTimeout(() => { $('paperCheck').textContent = 'Check open trades now'; }, 3000);
+  loadPaper();
+};
+
+// ---------------------------------------------------------------- account & team
+const when = t => t ? new Date(t * 1000).toLocaleString() : '—';
+
+function renderUser() {
+  const u = state.user;
+  $('whoami').textContent = u ? `${u.name || u.email}${u.role === 'admin' ? ' · admin' : ''}` : '';
+  $('teamTab').hidden = u?.role !== 'admin';
+}
+$('signOut').onclick = async () => {
+  try { await apiPost('/api/auth/logout'); } catch { /* signed out either way */ }
+  location.replace('/login');
+};
+
+function loadAccount() {
+  const on = !!state.user?.two_factor;
+  $('tfaTag').textContent = on ? 'on' : 'off';
+  $('tfaTag').className = `tag ${on ? 'up' : 'amber'}`;
+  $('tfaText').textContent = on
+    ? 'Signing in needs your password and a 6-digit code from your authenticator app.'
+    : 'Add a 6-digit code from an authenticator app (Google Authenticator, 1Password, Authy) on top of your password. Recommended for admins.';
+  $('tfaBox').innerHTML = on
+    ? `<form class="inline-form" id="tfaOff"><input id="tfaPw" type="password" placeholder="Your password" autocomplete="current-password" aria-label="Password"><button>Turn off</button></form><p class="lead small" id="tfaMsg"></p>`
+    : `<button id="tfaStart" type="button">Set up two-step sign-in</button><p class="lead small" id="tfaMsg"></p>`;
+  if (on) {
+    $('tfaOff').onsubmit = async e => {
+      e.preventDefault();
+      try { await apiPost('/api/auth/2fa/disable', { password: $('tfaPw').value }); state.user.two_factor = false; loadAccount(); }
+      catch (err) { $('tfaMsg').textContent = err.message; }
+    };
+  } else {
+    $('tfaStart').onclick = async () => {
+      let s;
+      try { s = await apiPost('/api/auth/2fa/begin'); } catch (err) { $('tfaMsg').textContent = err.message; return; }
+      $('tfaBox').innerHTML = `
+        <p class="lead small">In your authenticator app choose “enter a setup key” and type this key, or paste the link into an app that accepts it.</p>
+        <div class="linkbox"><code>${esc(s.secret.replace(/(.{4})/g, '$1 ').trim())}</code></div>
+        <div class="linkbox"><code>${esc(s.uri)}</code></div>
+        <form class="inline-form" id="tfaOn"><input id="tfaCode" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" aria-label="Code"><button>Confirm and turn on</button></form>
+        <p class="lead small" id="tfaMsg"></p>`;
+      $('tfaOn').onsubmit = async e => {
+        e.preventDefault();
+        try { await apiPost('/api/auth/2fa/enable', { secret: s.secret, code: $('tfaCode').value }); state.user.two_factor = true; loadAccount(); }
+        catch (err) { $('tfaMsg').textContent = err.message; }
+      };
+    };
+  }
+}
+$('pwForm').onsubmit = async e => {
+  e.preventDefault();
+  try {
+    const r = await apiPost('/api/auth/password', { old: $('pwOld').value, new: $('pwNew').value });
+    $('pwMsg').textContent = r.note;
+    setTimeout(() => location.replace('/login'), 1500);
+  } catch (err) { $('pwMsg').textContent = err.message; }
+};
+
+function showLink(title, r) {
+  const life = r.expires_days ? `${r.expires_days} days` : `${r.expires_hours} hours`;
+  $('inviteOut').innerHTML = `<p class="lead small">${esc(title)} Send it privately; it works once and expires in ${life}. It is shown only now.</p>
+    <div class="linkbox"><code id="linkText">${esc(r.link)}</code><button type="button" id="copyLink">Copy</button></div>`;
+  $('copyLink').onclick = () => navigator.clipboard?.writeText(r.link).then(() => { $('copyLink').textContent = 'Copied'; });
+}
+
+async function loadTeam() {
+  if (state.user?.role !== 'admin') return;
+  let p, a;
+  try { [p, a] = await Promise.all([api('/api/auth/people'), api('/api/auth/audit')]); }
+  catch (err) { $('peopleTable').innerHTML = `<tr><td>${esc(err.message)}</td></tr>`; return; }
+  $('peopleTable').innerHTML = `<thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Two-step</th><th>Last sign-in</th><th></th></tr></thead><tbody>${
+    p.users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td>${u.two_factor ? 'on' : 'off'}</td>
+      <td>${when(u.last_login)}</td><td>${u.id === state.user.id ? '<span class="tag">you</span>' : `
+      <button type="button" data-reset="${u.id}">Reset link</button>
+      <button type="button" data-dis="${u.id}" data-to="${u.disabled ? 0 : 1}">${u.disabled ? 'Enable' : 'Disable'}</button>`}</td></tr>`).join('')}</tbody>`;
+  $('inviteTable').innerHTML = p.invites.length
+    ? `<thead><tr><th>Email</th><th>Kind</th><th>Role</th><th>Expires</th><th></th></tr></thead><tbody>${
+      p.invites.map(i => `<tr><td>${esc(i.email)}</td><td>${i.purpose === 'reset' ? 'password reset' : 'invite'}</td><td>${esc(i.role)}</td>
+        <td>${when(i.expires)}</td><td><button type="button" data-revoke="${esc(i.email)}">Revoke</button></td></tr>`).join('')}</tbody>`
+    : '<tr><td class="lead small">No open links.</td></tr>';
+  $('auditTable').innerHTML = `<thead><tr><th>When</th><th>Event</th><th>Email</th><th>IP</th><th>Detail</th></tr></thead><tbody>${
+    a.events.map(e => `<tr><td>${when(e.at)}</td><td>${esc(e.event.replace(/_/g, ' '))}</td><td>${esc(e.email)}</td><td>${esc(e.ip)}</td><td>${esc(e.detail)}</td></tr>`).join('')}</tbody>`;
+}
+$('inviteForm').onsubmit = async e => {
+  e.preventDefault();
+  try {
+    const r = await apiPost('/api/auth/invite', { email: $('invEmail').value, role: $('invRole').value });
+    showLink(`Invite link for ${$('invEmail').value}.`, r);
+    $('invEmail').value = '';
+    loadTeam();
+  } catch (err) { $('inviteOut').innerHTML = `<p class="err">${esc(err.message)}</p>`; }
+};
+document.querySelector('main').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-reset],button[data-dis],button[data-revoke]');
+  if (!b) return;
+  try {
+    if (b.dataset.reset) {
+      showLink('Password reset link.', await apiPost('/api/auth/reset', { user_id: +b.dataset.reset }));
+      scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (b.dataset.dis) {
+      if (b.dataset.to === '1' && !confirm('Disable this account? They are signed out immediately.')) return;
+      await apiPost('/api/auth/disable', { user_id: +b.dataset.dis, disabled: b.dataset.to === '1' });
+    } else {
+      await apiPost('/api/auth/revoke_invite', { email: b.dataset.revoke });
+    }
+    loadTeam();
+  } catch (err) { alert(err.message); }
+});
 
 // ---------------------------------------------------------------- events
 $('assetSeg').onclick = e => {
@@ -616,6 +983,9 @@ let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() 
 (async () => {
   intro.step(0.1, 'Connecting to the market data feeds');
   try {
+    const me = await api('/api/auth/me', 15000);  // a 401 here sends the visitor to /login
+    state.user = me.user; state.csrf = me.csrf;
+    renderUser();
     state.universe = await api('/api/universe');
   } catch (e) {
     intro.step(1, 'Cannot reach the server');
@@ -630,5 +1000,5 @@ let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() 
   checkServer();
   load(); loadScan(); loadTicker(); loadMarkets(true); loadFeed();
   setInterval(loadTicker, 30000);
-  setInterval(checkServer, 60000);
+  setInterval(checkServer, 20000);
 })();

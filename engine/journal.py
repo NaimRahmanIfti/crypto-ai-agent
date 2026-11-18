@@ -146,12 +146,14 @@ def resolve_due() -> int:
     return done
 
 
-def _frame(asset: str | None = None, symbol: str | None = None) -> pd.DataFrame:
+def _frame(asset: str | None = None, symbol: str | None = None, since: float | None = None) -> pd.DataFrame:
     q, args = "SELECT * FROM predictions WHERE 1=1", []
     if asset:
         q += " AND asset=?"; args.append(asset)
     if symbol:
         q += " AND symbol=?"; args.append(symbol)
+    if since:
+        q += " AND created>=?"; args.append(float(since))
     with _lock:
         return pd.read_sql_query(q, _db(), params=args)
 
@@ -162,8 +164,16 @@ KIND_NAMES = {"ml": "ML next-bar probability", "trend": "Systematic trend positi
               "mtf_4h": "4h signal (1 day)", "mtf_1d": "Daily signal (5 days)", "mtf_1w": "Weekly signal (4 weeks)"}
 
 
-def track_record(asset: str | None = None, symbol: str | None = None) -> dict:
-    df = _frame(asset, symbol)
+def policy_since() -> float | None:
+    """When the current signal rules took effect: the first logged 'NO EDGE' call only
+    exists under the evidence-based timeframe policy, so it marks the switch exactly."""
+    with _lock:
+        row = _db().execute("SELECT MIN(created) FROM predictions WHERE label='NO EDGE'").fetchone()
+    return row[0] if row and row[0] else None
+
+
+def track_record(asset: str | None = None, symbol: str | None = None, since: float | None = None) -> dict:
+    df = _frame(asset, symbol, since)
     total, open_ = len(df), int((df["resolved"] == 0).sum()) if len(df) else 0
     res = df[(df["resolved"] == 1)] if len(df) else df
     kinds = []
@@ -190,7 +200,8 @@ def track_record(asset: str | None = None, symbol: str | None = None) -> dict:
                            "when": int(r["bar_ts"]), "label": r["label"], "ret": float(r["ret"]),
                            "lesson": _lesson(r)})
     return {"total": total, "open": open_, "resolved": int(len(res)), "kinds": kinds, "misses": misses,
-            "factor_skill": factor_skill(asset), "learning_active": bool(len(res) >= MIN_SAMPLES_FOR_LEARNING)}
+            "factor_skill": factor_skill(asset), "learning_active": bool(len(res) >= MIN_SAMPLES_FOR_LEARNING),
+            "since": since}
 
 
 def _lesson(r) -> str:

@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .DS_Store
 reports/research_*.csv
+# Personal trading state (theses, tickets, alerts, gate journal) and risk rules
+state/
+config/risk.json

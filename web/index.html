@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 0l8 8-8 8-8-8z' fill='%238C7BFF'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=9">
+  <link rel="stylesheet" href="styles.css?v=13">
 </head>
 <body class="booting">
   <canvas id="bg3d" aria-hidden="true"></canvas>
@@ -32,6 +32,7 @@
     </div>
     <div class="ticker" id="ticker"></div>
     <div class="status" id="status"><i class="dot"></i><span>idle</span></div>
+    <div class="userbox"><span id="whoami"></span><button id="signOut" type="button">Sign out</button></div>
   </header>
 
   <div class="banner" id="banner" hidden></div>
@@ -56,6 +57,10 @@
     <button data-view="news">News</button>
     <button data-view="record">Track record</button>
     <button data-view="lab">Model lab</button>
+    <button data-view="agents">Agents</button>
+    <button data-view="paper">Demo trades</button>
+    <button data-view="account">Account</button>
+    <button data-view="team" id="teamTab" hidden>Team</button>
   </div>
 
   <main class="grid" id="main">
@@ -201,6 +206,9 @@
     <!-- ============ Track record ============ -->
     <section class="card glass full" id="learnCard" data-view="record">
       <div class="card-h"><h3>Track record and learning</h3><span class="tag" id="learnTag">every call is checked</span></div>
+      <div class="seg news-tabs" id="learnScope" role="tablist">
+        <button data-scope="rules" class="on">Since the signal fix</button><button data-scope="all">All calls</button>
+      </div>
       <p class="lead" id="learnSummary"></p>
       <div class="desk-grid">
         <div>
@@ -212,6 +220,133 @@
           <h4>Which factors have actually worked</h4><div class="bars" id="learnSkill"></div>
         </div>
       </div>
+    </section>
+
+    <!-- ============ Agents ============ -->
+    <section class="card glass full" data-view="agents">
+      <div class="card-h"><h3>Research desk</h3><span class="tag" id="deskTag">20 agents, every signal gated</span></div>
+      <form class="ask" id="askForm">
+        <input id="askInput" placeholder="Ask the desk, e.g. find pair trades, what is Pelosi buying, review my trades" aria-label="Ask the desk" autocomplete="off">
+        <select id="deskSize" aria-label="Universe"><option value="popular">Popular markets</option><option value="all">Full list</option></select>
+        <button>Run the desk</button>
+      </form>
+      <p class="lead small" id="askAnswer"></p>
+      <div class="pipeline" id="pipeline"></div>
+    </section>
+
+    <section class="card glass full" data-view="agents">
+      <div class="card-h"><h3>Signals after the discipline gate</h3><span class="tag" id="gateCounts">run the desk to start</span></div>
+      <div class="gsignals" id="gSignals"><div class="empty">Nothing yet. Press "Run the desk": the agents scan, plan, replay, size and audit, then the discipline gate rules on every idea before it appears here.</div></div>
+    </section>
+
+    <section class="card glass full" data-view="agents">
+      <div class="card-h"><h3>Your theses</h3><span class="tag">record what you actually did; the coach reviews it</span></div>
+      <div class="table-wrap"><table class="scan" id="thesesTable"></table></div>
+    </section>
+
+    <section class="card glass" data-view="agents">
+      <div class="card-h"><h3>Alerts</h3></div>
+      <div class="factors" id="alertsList"></div>
+    </section>
+
+    <section class="card glass chart-card" data-view="agents">
+      <div class="card-h"><h3>Coach, research and pivots</h3></div>
+      <div id="learnBox"></div>
+    </section>
+
+    <section class="card glass full" data-view="agents">
+      <div class="card-h"><h3>Pairs, earnings and Congress</h3><span class="tag" id="ctxTag"></span></div>
+      <div id="ctxBox"></div>
+    </section>
+
+    <section class="card glass full" data-view="agents">
+      <div class="card-h"><h3>The agents</h3><span class="tag">one job each, only the skill it needs</span></div>
+      <div class="roster" id="roster"></div>
+    </section>
+
+    <!-- ============ Demo trades (paper trading) ============ -->
+    <section class="card glass full" data-view="paper">
+      <div class="card-h"><h3>Demo account</h3><span class="tag" id="paperTag">paper money, real prices</span></div>
+      <p class="lead small" id="paperLead">The desk takes every GO idea as a demo trade in a $10,000 paper account, with the same risk rules as real money,
+        and manages it to its stop, target or time limit using real prices, fees and slippage. Ideas the gate blocked are traded too, in a
+        separate shadow book with no money, so you can see whether the gate is right. Nothing is ever sent to a broker.</p>
+      <div class="inline-form">
+        <label class="switch"><input type="checkbox" id="paperAuto"> Run the desk and take demo trades automatically</label>
+        <button type="button" id="paperCheck">Check open trades now</button>
+      </div>
+      <div class="kpis kpis-wide" id="paperKpis"></div>
+      <canvas id="paperEquity" class="eqcanvas" aria-label="Demo account balance over time"></canvas>
+    </section>
+
+    <section class="card glass" data-view="paper">
+      <div class="card-h"><h3>Is the signal right?</h3><span class="tag">promised vs delivered</span></div>
+      <div id="paperTruth"></div>
+    </section>
+
+    <section class="card glass chart-card" data-view="paper">
+      <div class="card-h"><h3>Is the gate right?</h3><span class="tag">GO vs review vs blocked</span></div>
+      <p class="lead small" id="paperGate"></p>
+      <div class="table-wrap"><table class="scan" id="paperDecisions"></table></div>
+    </section>
+
+    <section class="card glass full" data-view="paper">
+      <div class="card-h"><h3>By trading style, long vs short</h3><span class="tag">scalps (1–5m) · day trades (15m) · short swings (4h) · swings (1–2 weeks)</span></div>
+      <div class="table-wrap"><table class="scan" id="paperStyles"></table></div>
+    </section>
+
+    <section class="card glass full" data-view="paper">
+      <div class="card-h"><h3>What it learned, by setup</h3><span class="tag">the gate uses this automatically</span></div>
+      <div class="table-wrap"><table class="scan" id="paperSetups"></table></div>
+    </section>
+
+    <section class="card glass full" data-view="paper">
+      <div class="card-h"><h3>Open demo trades</h3><span class="tag" id="paperOpenTag"></span></div>
+      <div class="table-wrap"><table class="scan" id="paperOpen"></table></div>
+    </section>
+
+    <section class="card glass full" data-view="paper">
+      <div class="card-h"><h3>History</h3><span class="tag">every demo trade, newest first</span></div>
+      <div class="table-wrap"><table class="scan" id="paperHistory"></table></div>
+    </section>
+
+    <!-- ============ Account ============ -->
+    <section class="card glass" data-view="account">
+      <div class="card-h"><h3>Change password</h3></div>
+      <form class="inline-form" id="pwForm">
+        <input id="pwOld" type="password" placeholder="Current password" autocomplete="current-password" aria-label="Current password">
+        <input id="pwNew" type="password" placeholder="New password (12+ characters)" autocomplete="new-password" aria-label="New password">
+        <button>Change password</button>
+      </form>
+      <p class="lead small" id="pwMsg"></p>
+    </section>
+
+    <section class="card glass chart-card" data-view="account">
+      <div class="card-h"><h3>Two-step sign-in</h3><span class="tag" id="tfaTag"></span></div>
+      <p class="lead small" id="tfaText"></p>
+      <div id="tfaBox"></div>
+    </section>
+
+    <!-- ============ Team (admin only) ============ -->
+    <section class="card glass full" data-view="team">
+      <div class="card-h"><h3>Invite someone</h3><span class="tag">only invited people can sign in</span></div>
+      <form class="inline-form" id="inviteForm">
+        <input id="invEmail" type="email" placeholder="their@email.com" aria-label="Email to invite">
+        <select id="invRole" aria-label="Role"><option value="member">Member</option><option value="admin">Admin (can invite others)</option></select>
+        <button>Create invite link</button>
+      </form>
+      <div id="inviteOut"></div>
+    </section>
+
+    <section class="card glass full" data-view="team">
+      <div class="card-h"><h3>People with access</h3></div>
+      <div class="table-wrap"><table class="scan" id="peopleTable"></table></div>
+      <h4>Pending invites and reset links</h4>
+      <div class="table-wrap"><table class="scan" id="inviteTable"></table></div>
+    </section>
+
+    <section class="card glass full" data-view="team">
+      <div class="card-h"><h3>Security log</h3><span class="tag">sign-ins, failures, invites, changes</span></div>
+      <div class="table-wrap"><table class="scan" id="auditTable"></table></div>
     </section>
 
     <!-- ============ Model lab ============ -->
@@ -253,6 +388,6 @@
   </footer>
 
   <div class="loader hide" id="loader"><div class="ring"></div><span id="loaderText">Training models</span></div>
-  <script type="module" src="app.js?v=9"></script>
+  <script type="module" src="app.js?v=14"></script>
 </body>
 </html>
